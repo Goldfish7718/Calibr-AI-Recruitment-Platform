@@ -42,31 +42,85 @@ Where:
 - correctness: 0-100 score
 - reason: Brief explanation
 - route_action: "next_difficulty" (≥80%), "normal_flow" (10-80%), or "followup" (≤10%)`;
-export const buildQueue1Prompt = (resume: string): string => `Analyze this resume and generate comprehensive interview questions covering ALL these categories:
+export const buildQueue1Prompt = (
+  jobData: {
+    title: string;
+    position: string;
+    department: string;
+    seniority: string;
+    techStack: string[];
+    description?: string;
+    requirements?: string;
+  },
+  resumeData: {
+    tagline?: string;
+    summary?: string;
+    workDetails?: any[];
+    education?: any[];
+    skills?: string;
+    projects?: any[];
+    certificates?: any[];
+  }
+): string => {
+  const jobContext = `
+JOB OPPORTUNITY:
+- Title: ${jobData.title}
+- Position: ${jobData.position}
+- Department: ${jobData.department}
+- Seniority Level: ${jobData.seniority}
+- Required Tech Stack: ${jobData.techStack.join(', ')}
+${jobData.description ? `- Description: ${jobData.description}` : ''}
+${jobData.requirements ? `- Requirements: ${jobData.requirements}` : ''}
+`;
 
-Resume:
-${resume}
+  const resumeContext = `
+CANDIDATE PROFILE:
+${resumeData.tagline ? `- Tagline: ${resumeData.tagline}` : ''}
+${resumeData.summary ? `- Summary: ${resumeData.summary}` : ''}
+${resumeData.skills ? `- Skills: ${resumeData.skills}` : ''}
+${resumeData.education && resumeData.education.length > 0 ? `- Education: ${resumeData.education.map(e => `${e.degree} from ${e.institution} (${e.year})`).join('; ')}` : ''}
+${resumeData.workDetails && resumeData.workDetails.length > 0 ? `- Work Experience: ${resumeData.workDetails.map(w => `${w.position} at ${w.company} - ${w.description}`).join('; ')}` : ''}
+${resumeData.projects && resumeData.projects.length > 0 ? `- Projects: ${resumeData.projects.map(p => `${p.name}: ${p.description}`).join('; ')}` : ''}
+${resumeData.certificates && resumeData.certificates.length > 0 ? `- Certifications: ${resumeData.certificates.map(c => `${c.name} from ${c.issuer}`).join('; ')}` : ''}
+`;
 
-Generate questions for:
-1. Introduction & Background
-2. Education
-3. Technical Skills (for each skill mentioned)
-4. Work Experience
-5. Projects (for each project)
-6. Achievements
-7. Certifications
+  return `You are conducting a technical interview for the following position. Generate comprehensive, tailored interview questions based on BOTH the job requirements AND the candidate's background.
+
+${jobContext}
+
+${resumeContext}
+
+INTERVIEW STRUCTURE:
+Generate questions that:
+1. **Assess fit for the specific role** - Focus on ${jobData.position} responsibilities and ${jobData.seniority} level expectations
+2. **Match required tech stack** - Prioritize questions about: ${jobData.techStack.join(', ')}
+3. **Explore candidate's experience** - Deep dive into their mentioned projects, work experience, and skills
+4. **Progressive difficulty** - Start with fundamentals, move to advanced concepts based on seniority (${jobData.seniority})
+5. **Real-world scenarios** - Include practical problems relevant to ${jobData.department} department
+
+QUESTION CATEGORIES (15-20 questions total):
+1. Introduction & Role Understanding (2-3 questions)
+2. Tech Stack Deep Dive - ${jobData.techStack.slice(0, 3).join(', ')} (5-7 questions)
+3. Candidate's Projects & Experience (3-4 questions) 
+4. Problem-Solving & System Design for ${jobData.position} (3-4 questions)
+5. Advanced Concepts for ${jobData.seniority} level (2-3 questions)
 
 For TECHNICAL questions, you MUST provide the correct answer.
 
 Return ONLY a JSON array in this exact format:
 [
-  {"question": "Tell me about yourself", "category": "non-technical", "answer": ""},
-  {"question": "What is React.js?", "category": "technical", "answer": "React.js is a JavaScript library for building user interfaces"},
-  {"question": "Describe your most recent project", "category": "non-technical", "answer": ""}
+  {"question": "Tell me about your experience with [specific tech from their resume] and how it applies to [job requirement]", "category": "non-technical", "answer": ""},
+  {"question": "Explain [core concept from required tech stack] and how you would use it in a ${jobData.position} role", "category": "technical", "answer": "detailed technical answer"},
+  {"question": "Walk me through your [specific project from resume]. What challenges did you face?", "category": "non-technical", "answer": ""}
 ]
 
-Generate at least 15-20 questions. Make sure to mark technical questions as 'technical' and others as 'non-technical'.
-Ensure at least 80% are technical questions.`;
+CRITICAL: 
+- Ensure at least 80% are technical questions
+- Tailor difficulty to ${jobData.seniority} level (junior=basics, mid=intermediate+design, senior=architecture+optimization)
+- Reference specific items from candidate's resume to make questions personal
+- Focus heavily on ${jobData.techStack.join(', ')} technologies
+`;
+};
 
 export const buildQueue2Prompt = (question: string, correctAnswer: string): string => `Based on this technical question:
 Question: ${question}
@@ -151,12 +205,32 @@ Return ONLY a JSON object:
 {"question": "your mood-based follow-up question"}`;
 
 // Batched generation prompt: limit number of questions
-export const buildQueue1BatchPrompt = (resume: string, count: number): string => `Analyze this resume and generate ONLY ${count} interview questions mixing technical and non-technical. For technical items, include an exact correct answer.
+export const buildQueue1BatchPrompt = (
+  jobData: {
+    title: string;
+    position: string;
+    techStack: string[];
+    seniority: string;
+  },
+  resumeData: {
+    skills?: string;
+    projects?: any[];
+    workDetails?: any[];
+  },
+  count: number
+): string => `Generate ONLY ${count} tailored technical interview questions for a ${jobData.position} (${jobData.seniority} level) position.
 
-Resume:
-${resume}
+Required Tech Stack: ${jobData.techStack.join(', ')}
+Candidate Skills: ${resumeData.skills || 'Not specified'}
 
-Return ONLY a JSON array of objects with fields: question, category ("technical" | "non-technical"), answer (string, empty for non-technical).
-Ensure at least 80% are technical questions.`;
+For technical questions, include the correct answer.
+
+Return ONLY a JSON array:
+[
+  {"question": "technical question about required stack", "category": "technical", "answer": "correct answer"},
+  {"question": "question about candidate's experience", "category": "non-technical", "answer": ""}
+]
+
+Ensure at least 80% are technical questions focused on ${jobData.techStack.join(', ')}.`;
 
 

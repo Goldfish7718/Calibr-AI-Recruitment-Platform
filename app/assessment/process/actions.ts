@@ -25,6 +25,7 @@ export interface AssessmentDetails {
     technicalInterview: boolean;
     hrInterview: boolean;
   };
+  technicalInterviewId?: string;
   aptitudeDetails?: {
     _id: string;
     totalQuestions: number;
@@ -173,6 +174,7 @@ export async function fetchAssessmentDetails(
         description: assessment.description,
         status: assessment.status,
         toConductRounds: assessment.toConductRounds,
+        technicalInterviewId: assessment.technicalInterviewId?.toString(),
         aptitudeDetails,
         codingDetails,
         overallPassingCriteria: assessment.overallPassingCriteria,

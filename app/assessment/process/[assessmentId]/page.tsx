@@ -210,7 +210,11 @@ const InterviewProgress = () => {
           router.push(`/assessment/coding/${assessmentData.codingDetails?._id}`);
           break;
         case 'technical':
-          router.push(`/assessment/technical/${assessmentData._id}`);
+          if (!assessmentData.technicalInterviewId) {
+            toast.error('Technical interview not configured');
+            return;
+          }
+          router.push(`/assessment/technical-interview/${assessmentData.technicalInterviewId}`);
           break;
         case 'hr':
           router.push(`/assessment/hr/${assessmentData._id}`);

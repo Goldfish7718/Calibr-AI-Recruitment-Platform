@@ -13,8 +13,8 @@ export function useInterviewActions() {
     return await getInterviewConfigAction(interviewId);
   };
 
-  const generateQuestionsBatch = async (resume: string, count: number) => {
-    return await generateQuestionsBatchAction(resume, count);
+  const generateQuestionsBatch = async (contextData: any, count: number) => {
+    return await generateQuestionsBatchAction(contextData, count);
   };
 
   const analyzeAnswer = async (

@@ -27,10 +27,37 @@ export async function getInterviewConfig(interviewId: string) {
   }
 }
 
-export async function generateQuestions(resume: string): Promise<{ success: boolean; queues?: Queues; error?: string }> {
+export async function generateQuestions(context: {
+  jobData?: {
+    title: string;
+    department: string;
+    position: string;
+    seniority: string;
+    techStack: string[];
+    description?: string;
+    requirements?: string;
+  };
+  resumeData?: {
+    tagline?: string;
+    summary?: string;
+    workDetails?: any[];
+    education?: any[];
+    skills?: string;
+    projects?: any[];
+    certificates?: any[];
+  };
+}): Promise<{ success: boolean; queues?: Queues; error?: string }> {
   try {
-    // Generate Queue 1 questions
-    const q1Prompt = buildQueue1Prompt(resume);
+    // Validate required context
+    if (!context.jobData || !context.resumeData) {
+      return { 
+        success: false, 
+        error: 'Job and resume data are required to generate personalized questions' 
+      };
+    }
+
+    // Generate Queue 1 questions with job and resume context
+    const q1Prompt = buildQueue1Prompt(context.jobData, context.resumeData);
 
     const q1Result = await callGeminiAPI(q1Prompt);
     let queue1: Question[] = [];
@@ -122,9 +149,24 @@ export async function generateQuestions(resume: string): Promise<{ success: bool
 }
 
 // Batched generation: generate a limited number of questions (e.g., 20% of target)
-export async function generateQuestionsBatch(resume: string, count: number): Promise<{ success: boolean; questions?: Question[]; error?: string }> {
+export async function generateQuestionsBatch(
+  context: {
+    jobData: {
+      title: string;
+      position: string;
+      techStack: string[];
+      seniority: string;
+    };
+    resumeData: {
+      skills?: string;
+      projects?: any[];
+      workDetails?: any[];
+    };
+  },
+  count: number
+): Promise<{ success: boolean; questions?: Question[]; error?: string }> {
   try {
-    const prompt = buildQueue1BatchPrompt(resume, count);
+    const prompt = buildQueue1BatchPrompt(context.jobData, context.resumeData, count);
     const result = await callGeminiAPI(prompt);
     let questions: Question[] = [];
     if (result) {

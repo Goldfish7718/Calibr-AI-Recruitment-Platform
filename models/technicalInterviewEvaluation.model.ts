@@ -6,6 +6,9 @@ export interface TechnicalInterviewEvaluation extends Document {
   assessmentId?: mongoose.Types.ObjectId | null;
   technicalInterviewId: mongoose.Types.ObjectId;
 
+  // Status tracking (similar to aptitude)
+  status: 'in_progress' | 'completed';
+  
   // Timeline
   startedAt: Date;
   endedAt?: Date;
@@ -65,6 +68,13 @@ const TechnicalInterviewEvaluationSchema: Schema = new Schema({
   jobId: { type: Schema.Types.ObjectId, ref: 'jobopportunity' },
   assessmentId: { type: Schema.Types.ObjectId, ref: 'assessment' },
   technicalInterviewId: { type: Schema.Types.ObjectId, ref: 'technicalinterview', required: true },
+
+  status: { 
+    type: String, 
+    enum: ['in_progress', 'completed'], 
+    default: 'in_progress',
+    required: true 
+  },
 
   startedAt: { type: Date, required: true },
   endedAt: { type: Date },
