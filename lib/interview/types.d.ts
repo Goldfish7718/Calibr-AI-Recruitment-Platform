@@ -75,6 +75,11 @@ export interface EngineStats {
   queue3Size: number;
   violationCount: number;
   interviewEnded: boolean;
+  // Chunking stats
+  currentChunk?: number;
+  totalChunks?: number;
+  chunksPreprocessed?: number;
+  preprocessingInProgress?: boolean;
 }
 
 export interface EngineAdapter {
