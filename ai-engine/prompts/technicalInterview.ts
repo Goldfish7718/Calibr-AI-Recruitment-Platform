@@ -38,16 +38,51 @@ Return ONLY a JSON array:
   {"question": "hard question", "difficulty": "hard", "answer": "correct answer"}
 ]`;
 
-export const buildAnalysisPrompt = (question: string, correctAnswer: string, userAnswer: string): string => `Compare these answers and determine correctness percentage:
+/**
+ * Generate ideal answer with source URLs for verification
+ */
+export const buildIdealAnswerPrompt = (question: string): string => `For this technical question, provide a comprehensive ideal answer with supporting sources:
 
 Question: ${question}
-Correct Answer: ${correctAnswer}
+
+Generate:
+1. A detailed, technically accurate ideal answer
+2. 2-3 authoritative source URLs that verify the answer (documentation, official sites, reputable tech resources)
+
+Return ONLY a JSON object:
+{
+  "ideal_answer": "comprehensive technical answer",
+  "source_urls": [
+    "https://example.com/source1",
+    "https://example.com/source2"
+  ]
+}
+
+Ensure sources are real, authoritative URLs (e.g., MDN, official documentation, Stack Overflow, tech blogs).`;
+
+export const buildAnalysisPrompt = (question: string, idealAnswer: string, userAnswer: string): string => `Compare these answers and determine correctness percentage:
+
+Question: ${question}
+Ideal Answer: ${idealAnswer}
 User's Answer: ${userAnswer}
 
-Analyze if the user's answer is correct. Return ONLY a JSON object:
-{"correctness": 85, "reason": "explanation"}
+Analyze the user's answer against the ideal answer. Consider:
+- Technical accuracy
+- Completeness of explanation
+- Correct terminology usage
+- Conceptual understanding
 
-correctness should be a number from 0-100.`;
+Return ONLY a JSON object:
+{
+  "correctness": 85,
+  "reason": "Brief explanation of scoring",
+  "route_action": "next_difficulty"
+}
+
+Where:
+- correctness: 0-100 score
+- reason: Brief explanation
+- route_action: "next_difficulty" (≥80%), "normal_flow" (10-80%), or "followup" (≤10%)`;
 
 export const buildFollowupPrompt = (question: string, wrongAnswer: string): string => `The candidate gave a completely wrong answer:
 

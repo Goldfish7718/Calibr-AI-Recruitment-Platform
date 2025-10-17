@@ -2,11 +2,11 @@
 
 import { connectToDatabase } from "@/utils/connectDb";
 import TechnicalInterviewModel from "@/models/technicalInterview.model";
-import { buildQueue1Prompt, buildQueue2Prompt, buildAnalysisPrompt, buildFollowupPrompt, buildQueue1BatchPrompt } from "@/ai-engine/prompts/technicalInterview";
+import { buildQueue1Prompt, buildQueue2Prompt, buildFollowupPrompt, buildQueue1BatchPrompt } from "@/ai-engine/prompts/technicalInterview";
 import TechnicalInterviewEvaluationModel from "@/models/technicalInterviewEvaluation.model";
 import mongoose from "mongoose";
 import { requireAuth } from "@/utils/auth-helpers";
-import { Question, Queues, generateId, ensureIds, callGeminiAPI, randomizeQueue1 } from "@/utils/interview";
+import { Question, Queues, generateId, ensureIds, callGeminiAPI, randomizeQueue1, generateIdealAnswer, evaluateAnswer, EvaluationResult } from "@/utils/interview";
 import type { QuestionEntry } from "@/lib/interview/types";
 
 export async function getInterviewConfig(interviewId: string) {
@@ -48,6 +48,18 @@ export async function generateQuestions(resume: string): Promise<{ success: bool
 
     queue1 = ensureIds(queue1);
 
+    // PREPROCESSING: Generate ideal answers and source URLs for technical questions
+    for (const question of queue1) {
+      if (question.category === 'technical' && !question.answer) {
+        const idealAnswerData = await generateIdealAnswer(question.question);
+        if (idealAnswerData) {
+          question.answer = idealAnswerData.ideal_answer;
+          // Store source URLs in a custom field for later use
+          (question as any).source_urls = idealAnswerData.source_urls;
+        }
+      }
+    }
+
     // Randomize Queue 1 while maintaining intro/outro and 20% non-technical limit
     queue1 = randomizeQueue1(queue1);
 
@@ -74,6 +86,18 @@ export async function generateQuestions(resume: string): Promise<{ success: bool
               topicId: tq.topicId, // Link to parent topic
               id: generateId()
             }));
+            
+            // PREPROCESSING: Generate ideal answers for Queue 2 questions
+            for (const q2Question of deepDiveQuestions) {
+              if (!q2Question.answer) {
+                const idealAnswerData = await generateIdealAnswer(q2Question.question);
+                if (idealAnswerData) {
+                  q2Question.answer = idealAnswerData.ideal_answer;
+                  (q2Question as any).source_urls = idealAnswerData.source_urls;
+                }
+              }
+            }
+            
             queue2.push(...deepDiveQuestions);
           }
         } catch (e) {
@@ -188,30 +212,23 @@ export async function analyzeAnswer(
   userAnswer: string,
   currentQueues: Queues,
   currentQuestion: Question
-): Promise<{ updatedQueues?: Queues; correctness?: number }> {
+): Promise<{ updatedQueues?: Queues; correctness?: number; evaluation?: EvaluationResult }> {
   try {
-    // Analyze correctness
-    const analysisPrompt = buildAnalysisPrompt(question, correctAnswer, userAnswer);
-
-    const analysisResult = await callGeminiAPI(analysisPrompt);
-    let correctness = 50;
-
-    if (analysisResult) {
-      try {
-        const jsonMatch = analysisResult.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const analysis = JSON.parse(jsonMatch[0]);
-          correctness = analysis.correctness || 50;
-        }
-      } catch (e) {
-        console.error('Parse error:', e);
-      }
+    // Get source URLs from question if available
+    const sourceUrls = (currentQuestion as any).source_urls || [];
+    
+    // Use the new evaluateAnswer function for comprehensive evaluation
+    const evaluation = await evaluateAnswer(question, userAnswer, correctAnswer, sourceUrls);
+    
+    if (!evaluation) {
+      return { correctness: 50 };
     }
 
+    const correctness = evaluation.score;
     const updatedQueues = { ...currentQueues };
 
-    // Apply flow rules based on correctness and question type
-    if (correctness <= 10) {
+    // Apply flow rules based on correctness and route_action
+    if (evaluation.route_action === 'followup' || correctness <= 10) {
       // Generate follow-up for very wrong answer
       const followupPrompt = buildFollowupPrompt(question, userAnswer);
 
@@ -241,33 +258,35 @@ export async function analyzeAnswer(
           console.error('Parse error:', e);
         }
       }
-    } else if (correctness >= 80 && currentQuestion.category === 'technical') {
+    } else if (evaluation.route_action === 'next_difficulty' || correctness >= 80) {
       // Progress to next difficulty level
       const topicId = currentQuestion.topicId;
       
-      if (!currentQuestion.difficulty) {
-        // Base question with high score → move MEDIUM to Queue 1
-        const mediumQ = updatedQueues.queue2.find(
-          q => q.topicId === topicId && q.difficulty === 'medium'
-        );
-        if (mediumQ) {
-          updatedQueues.queue2 = updatedQueues.queue2.filter(q => q.id !== mediumQ.id);
-          updatedQueues.queue1.unshift(mediumQ); // Add to front of Queue 1
-        }
-      } else if (currentQuestion.difficulty === 'medium') {
-        // Medium question with high score → move HARD to Queue 1
-        const hardQ = updatedQueues.queue2.find(
-          q => q.topicId === topicId && q.difficulty === 'hard'
-        );
-        if (hardQ) {
-          updatedQueues.queue2 = updatedQueues.queue2.filter(q => q.id !== hardQ.id);
-          updatedQueues.queue1.unshift(hardQ); // Add to front of Queue 1
+      if (currentQuestion.category === 'technical') {
+        if (!currentQuestion.difficulty) {
+          // Base question with high score → move MEDIUM to Queue 1
+          const mediumQ = updatedQueues.queue2.find(
+            q => q.topicId === topicId && q.difficulty === 'medium'
+          );
+          if (mediumQ) {
+            updatedQueues.queue2 = updatedQueues.queue2.filter(q => q.id !== mediumQ.id);
+            updatedQueues.queue1.unshift(mediumQ); // Add to front of Queue 1
+          }
+        } else if (currentQuestion.difficulty === 'medium') {
+          // Medium question with high score → move HARD to Queue 1
+          const hardQ = updatedQueues.queue2.find(
+            q => q.topicId === topicId && q.difficulty === 'hard'
+          );
+          if (hardQ) {
+            updatedQueues.queue2 = updatedQueues.queue2.filter(q => q.id !== hardQ.id);
+            updatedQueues.queue1.unshift(hardQ); // Add to front of Queue 1
+          }
         }
       }
     }
-    // 10-80%: Just proceed to next question (no special action)
+    // route_action === 'normal_flow' or 10-80%: Just proceed to next question (no special action)
 
-    return { updatedQueues, correctness };
+    return { updatedQueues, correctness, evaluation };
 
   } catch (error) {
     console.error('Error analyzing answer:', error);
