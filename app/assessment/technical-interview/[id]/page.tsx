@@ -11,37 +11,29 @@ import {
   Mic,
   MicOff,
   Volume2,
-  VolumeX,
   Clock,
 } from "lucide-react";
 import { technicalInterviewAdapter } from "../adapter";
 import VideoProcessing from "@/lib/video-processing";
-import { ControlBar, StatsCards, ChatList } from "@/lib/interview/components";
-import QueuesPanel from "./_components/QueuesPanel";
 import HeaderBanner from "./_components/HeaderBanner";
 import SetupScreen from "./_components/SetupScreen";
 import LoadingScreen from "./_components/LoadingScreen";
-import type { InterviewConfig, Question, ConversationItem } from "../types";
-import { ttsToAudioUrl, getMicStreamAudioOnly } from "@/utils/media";
+import type { InterviewConfig, Question } from "../types";
+import { formatTime } from "@/utils/interview";
+import {
+  initializeSpeechRecognition,
+  startAudioRecording,
+  stopMediaStream,
+  toggleAudioMute,
+  type SpeechRecognition
+} from "@/utils/media";
+import { AudioPlayer } from "@/utils/audioPlayback";
+import { createChunkManager, interleaveQueues, type ChunkData } from "@/lib/interview/simpleChunkManager";
+import { preprocessChunk } from "@/lib/interview/preprocessingService";
+import { getPreprocessedChunk } from "../chunkActions";
+import { generateQuestions } from "../actions";
 
-// Minimal typings for Web Speech API (not included in default TS DOM lib)
-declare global {
-  interface Window {
-    webkitSpeechRecognition?: new () => SpeechRecognition;
-  }
-}
-
-interface SpeechRecognition {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: any) => void) | null;
-  onerror: ((event: any) => void) | null;
-  start: () => void;
-  stop: () => void;
-}
-
-type Conversation = ConversationItem;
+//type Conversation = ConversationItem;
 
 export default function VoiceInterviewPage() {
   const params = useParams();
@@ -52,8 +44,6 @@ export default function VoiceInterviewPage() {
   >("setup");
   const [resumeData, setResumeData] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [userAnswer, setUserAnswer] = useState("");
-  const [conversation, setConversation] = useState<Conversation[]>([]);
   const [queues, setQueues] = useState<{
     queue1: Question[];
     queue2: Question[];
@@ -62,10 +52,14 @@ export default function VoiceInterviewPage() {
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [stats, setStats] = useState({
     questionsAsked: 0,
-    queue1Size: 0,
-    queue2Size: 0,
-    queue3Size: 0,
   });
+
+  // Chunking state
+  const [chunks, setChunks] = useState<ChunkData[]>([]);
+  const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
+  const [currentChunk, setCurrentChunk] = useState<ChunkData | null>(null);
+  const [chunkQuestionIndex, setChunkQuestionIndex] = useState(0);
+  const audioPlayerRef = useRef<AudioPlayer | null>(null);
 
   // Voice and media states
   const [isRecording, setIsRecording] = useState(false);
@@ -77,18 +71,20 @@ export default function VoiceInterviewPage() {
   const [hasConsent, setHasConsent] = useState(false);
 
   // Refs
-  const chatContainerRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
   const speechRecognitionRef = useRef<SpeechRecognition | null>(null);
-  const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const audioElementRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
-  // Camera preview is handled by VideoProcessing component
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const evaluationStartedRef = useRef<boolean>(false);
-  const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const transcriptBufferRef = useRef<string>("");
+  const submitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chunkManagerRef = useRef<ReturnType<typeof createChunkManager> | null>(null);
+  const preprocessingNextChunkRef = useRef<boolean>(false);
+
+  // Initialize audio player once
+  useEffect(() => {
+    audioPlayerRef.current = new AudioPlayer(0.8);
+  }, []);
 
   // Fetch interview configuration on component mount
   useEffect(() => {
@@ -113,36 +109,25 @@ export default function VoiceInterviewPage() {
 
   // Initialize speech recognition
   useEffect(() => {
-    if (typeof window !== "undefined" && "webkitSpeechRecognition" in window) {
-      const recognition = new (window as any).webkitSpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = interviewConfig?.language || "en-US";
-      
-      recognition.onresult = (event: any) => {
-        let finalTranscript = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          }
-        }
-        if (finalTranscript) {
-          setUserAnswer((prev) => prev + (prev ? " " : "") + finalTranscript);
-          if (autoSubmitTimerRef.current)
-            clearTimeout(autoSubmitTimerRef.current);
-          autoSubmitTimerRef.current = setTimeout(() => {
-            submitAnswer();
-          }, 600);
-        }
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error("Speech recognition error:", event.error);
+    const recognition = initializeSpeechRecognition(
+      interviewConfig?.language || "en-US",
+      (transcript) => {
+        // Buffer the transcript
+        transcriptBufferRef.current += (transcriptBufferRef.current ? " " : "") + transcript;
+        
+        // Clear existing timeout
+        if (submitTimeoutRef.current) clearTimeout(submitTimeoutRef.current);
+        
+        // Set timeout to submit after 2 seconds of silence
+        submitTimeoutRef.current = setTimeout(() => {
+          submitAnswer();
+        }, 2000);
+      },
+      () => {
         setIsRecording(false);
-      };
-
-      speechRecognitionRef.current = recognition;
-    }
+      }
+    );
+    speechRecognitionRef.current = recognition;
   }, [interviewConfig?.language]);
 
   // Timer effect
@@ -166,92 +151,97 @@ export default function VoiceInterviewPage() {
     };
   }, [currentScreen, timeRemaining]);
 
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop =
-        chatContainerRef.current.scrollHeight;
-    }
-  }, [conversation]);
-
-  const displayMessage = (content: string, isBot: boolean) => {
-    setConversation((prev) => [
-      ...prev,
-      {
-      role: isBot ? "assistant" : "user",
-      content,
-      question: isBot ? currentQuestion : undefined,
-        timestamp: new Date(),
-      },
-    ]);
-  };
-
-  // Voice and media functions
-  const stopAudioPlayback = () => {
-    try {
-      if (audioElementRef.current) {
-        audioElementRef.current.pause();
-        audioElementRef.current.src = "";
-        audioElementRef.current = null;
-      }
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current);
-        audioUrlRef.current = null;
-      }
-    } catch {
-      // Ignore errors during cleanup
-    }
-    setIsSpeaking(false);
-  };
-
-  const speakText = async (text: string) => {
-    // Stop any ongoing playback
-    stopAudioPlayback();
-
+  /**
+   * Play audio from S3 URL using AudioPlayer
+   */
+  const playQuestionAudio = async (audioUrl: string) => {
+    if (!audioPlayerRef.current) return;
+    
     try {
       setIsSpeaking(true);
-      const objectUrl = await ttsToAudioUrl(text);
-      audioUrlRef.current = objectUrl;
-      const audio = new Audio(objectUrl);
-      audioElementRef.current = audio;
-      audio.onended = () => {
-        setIsSpeaking(false);
-        // cleanup URL after end
-        if (audioUrlRef.current) {
-          URL.revokeObjectURL(audioUrlRef.current);
-          audioUrlRef.current = null;
-        }
-        audioElementRef.current = null;
-      };
-      await audio.play();
-    } catch (e) {
-      console.error("Audio playback error:", e);
+      await audioPlayerRef.current.play(audioUrl, {
+        onStart: () => {
+          console.log("[Audio] Playing question audio...");
+        },
+        onEnd: () => {
+          setIsSpeaking(false);
+          console.log("[Audio] Question audio completed");
+        },
+        onError: (error) => {
+          console.error("[Audio] Playback error:", error);
+          setIsSpeaking(false);
+        },
+      });
+    } catch (error) {
+      console.error("[Audio] Failed to play audio:", error);
       setIsSpeaking(false);
+    }
+  };
+
+  /**
+   * Preprocess next chunk in background
+   */
+  const preprocessNextChunk = async () => {
+    if (!chunkManagerRef.current || preprocessingNextChunkRef.current) return;
+
+    const nextChunkIndex = currentChunkIndex + 1;
+    if (nextChunkIndex >= chunks.length) return;
+
+    const nextChunk = chunkManagerRef.current.getChunk(nextChunkIndex);
+    if (!nextChunk) return;
+
+    preprocessingNextChunkRef.current = true;
+    console.log(`[Chunking] Preprocessing Chunk ${nextChunk.chunkNumber} in background...`);
+
+    try {
+      await preprocessChunk(nextChunk, interviewId, "technical");
+      console.log(`[Chunking] ✓ Chunk ${nextChunk.chunkNumber} preprocessed successfully`);
+    } catch (error) {
+      console.error(`[Chunking] Failed to preprocess chunk ${nextChunk.chunkNumber}:`, error);
+    } finally {
+      preprocessingNextChunkRef.current = false;
+    }
+  };
+
+  /**
+   * Load chunk from database or use in-memory version
+   */
+  const loadChunk = async (chunkIndex: number): Promise<ChunkData | null> => {
+    if (!chunkManagerRef.current) return null;
+
+    try {
+      // Try to get preprocessed chunk from database
+      const result = await getPreprocessedChunk(interviewId, chunkIndex);
+      
+      if (result.success && result.questions && result.audioUrls) {
+        console.log(`[Chunking] Loaded preprocessed chunk ${chunkIndex} from database`);
+        
+        // Update chunk with preprocessed data
+        const chunk = chunkManagerRef.current.getChunk(chunkIndex);
+        if (chunk) {
+          chunk.questions = result.questions;
+          // Audio URLs are already in questions from database
+          return chunk;
+        }
+      }
+
+      // Fallback to in-memory chunk
+      console.log(`[Chunking] Using in-memory chunk ${chunkIndex}`);
+      return chunkManagerRef.current.getChunk(chunkIndex);
+    } catch (error) {
+      console.error(`[Chunking] Error loading chunk ${chunkIndex}:`, error);
+      return chunkManagerRef.current.getChunk(chunkIndex);
     }
   };
 
   const startRecording = async () => {
     try {
-      const stream = await getMicStreamAudioOnly();
+      const { mediaRecorder, stream } = await startAudioRecording((audioBlob) => {
+        console.log("Audio recorded:", audioBlob);
+      });
       
       streamRef.current = stream;
-
-      const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        audioChunksRef.current.push(event.data);
-      };
-
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, {
-          type: "audio/wav",
-        });
-        // Here you would typically send the audio to a speech-to-text service
-        console.log("Audio recorded:", audioBlob);
-      };
-
-      mediaRecorder.start();
       setIsRecording(true);
 
       // Start speech recognition
@@ -277,28 +267,9 @@ export default function VoiceInterviewPage() {
     }
   };
 
-  const toggleMute = () => {
-    if (streamRef.current) {
-      const audioTracks = streamRef.current.getAudioTracks();
-      audioTracks.forEach((track) => {
-        track.enabled = isMuted;
-      });
-      setIsMuted(!isMuted);
-    }
-  };
-
-  const stopScreenShare = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-    }
-  };
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs
-      .toString()
-      .padStart(2, "0")}`;
+  const handleToggleMute = () => {
+    const newMutedState = toggleAudioMute(streamRef.current, isMuted);
+    setIsMuted(newMutedState);
   };
 
   const startInterview = async () => {
@@ -323,37 +294,85 @@ export default function VoiceInterviewPage() {
       ) {
         await startRecording();
       }
+      
       // Start evaluation document once per session
       if (!evaluationStartedRef.current) {
         await technicalInterviewAdapter.startEvaluation(interviewId);
         evaluationStartedRef.current = true;
       }
 
-      // Batched generation (20% of estimated total)
-      const estimatedTotal = Math.max(
-        10,
-        Math.floor((interviewConfig?.duration || 30) / 2)
-      );
-      const batchCount = Math.max(3, Math.ceil(estimatedTotal * 0.2));
-      const batch = await technicalInterviewAdapter.generateBatch(resumeData, batchCount);
-      if (batch.success && batch.questions) {
-        const nextQueues = {
-          queue1: batch.questions,
-          queue2: [],
-          queue3: [],
-        } as typeof queues;
-        setQueues(nextQueues);
-        setStats((prev) => ({
-          ...prev,
-          queue1Size: nextQueues.queue1.length,
-          queue2Size: 0,
-          queue3Size: 0,
-        }));
-        setCurrentScreen("interview");
-        askNextQuestion(nextQueues);
-      } else {
+      // Generate all questions
+      console.log("[Chunking] Generating questions...");
+      const result = await generateQuestions(resumeData);
+      
+      if (!result.success || !result.queues) {
         alert("Failed to generate questions. Please try again.");
         setCurrentScreen("setup");
+        setIsLoading(false);
+        return;
+      }
+
+      // Interleave queue1 questions with their queue2 follow-ups
+      // This ensures each queue1 question is followed by its deep-dive questions
+      console.log("[Chunking] Interleaving Queue1 and Queue2 questions...");
+      const interleavedQuestions = interleaveQueues(
+        result.queues.queue1,
+        result.queues.queue2
+      );
+      
+      console.log(`[Chunking] Total questions after interleaving: ${interleavedQuestions.length}`);
+      console.log(`[Chunking] - Queue1 (main): ${result.queues.queue1.length}`);
+      console.log(`[Chunking] - Queue2 (follow-ups): ${result.queues.queue2.length}`);
+
+      // Create chunks (5 questions per chunk)
+      console.log("[Chunking] Creating chunks (5 questions per chunk)...");
+      const chunkManager = createChunkManager(interleavedQuestions, 5);
+      chunkManagerRef.current = chunkManager;
+      
+      const totalChunks = chunkManager.getTotalChunks();
+      const chunkArray: ChunkData[] = [];
+      for (let i = 0; i < totalChunks; i++) {
+        chunkArray.push(chunkManager.getChunk(i));
+      }
+      setChunks(chunkArray);
+      
+      console.log(`[Chunking] ✓ Created ${totalChunks} chunks with interleaved questions`);
+
+      // Preprocess Chunk 1 immediately
+      if (chunkArray.length > 0) {
+        console.log("[Chunking] Preprocessing Chunk 1...");
+        await preprocessChunk(chunkArray[0], interviewId, "technical");
+        console.log("[Chunking] ✓ Chunk 1 preprocessed");
+      }
+
+      // Load first chunk
+      const firstChunk = await loadChunk(0);
+      if (!firstChunk || firstChunk.questions.length === 0) {
+        alert("No questions available. Please try again.");
+        setCurrentScreen("setup");
+        setIsLoading(false);
+        return;
+      }
+
+      setCurrentChunk(firstChunk);
+      setCurrentChunkIndex(0);
+      setChunkQuestionIndex(0);
+      
+      // Set queues for compatibility
+      setQueues({
+        queue1: result.queues.queue1,
+        queue2: result.queues.queue2,
+        queue3: result.queues.queue3,
+      });
+
+      setCurrentScreen("interview");
+      
+      // Start with first question
+      await askFirstQuestion(firstChunk);
+      
+      // Preprocess next chunk in background
+      if (chunkArray.length > 1) {
+        preprocessNextChunk();
       }
     } catch (error) {
       console.error("Error starting interview:", error);
@@ -364,74 +383,92 @@ export default function VoiceInterviewPage() {
     }
   };
 
-  const askNextQuestion = async (currentQueues = queues) => {
-    let nextQuestion: Question | null = null;
-    let queueType: keyof typeof currentQueues = "queue1";
+  /**
+   * Ask the first question from the loaded chunk
+   */
+  const askFirstQuestion = async (chunk: ChunkData) => {
+    if (!chunk || chunk.questions.length === 0) return;
 
-    if (currentQueues.queue3.length > 0) {
-      nextQuestion = currentQueues.queue3[0];
-      queueType = "queue3";
-    } else if (currentQueues.queue1.length > 0) {
-      nextQuestion = currentQueues.queue1[0];
-      queueType = "queue1";
+    const question = chunk.questions[0];
+    setCurrentQuestion(question);
+    setStats((prev) => ({ ...prev, questionsAsked: 1 }));
+
+    // Play audio if available
+    if ((question as any).audioUrl) {
+      await playQuestionAudio((question as any).audioUrl);
+    } else {
+      console.warn("[Audio] No audio URL for question:", question.id);
     }
+  };
 
-    if (!nextQuestion) {
+  const askNextQuestion = async () => {
+    if (!currentChunk) {
       endInterview();
       return;
     }
 
-    setCurrentQuestion(nextQuestion);
-    setStats((prev) => ({
-      ...prev,
-      questionsAsked: prev.questionsAsked + 1,
-      [queueType + "Size"]: currentQueues[queueType].length - 1,
-    }));
+    const nextQuestionIndex = chunkQuestionIndex + 1;
 
-    // Remove question from queue
-    setQueues((prev) => ({
-      ...prev,
-      [queueType]: prev[queueType].slice(1),
-    }));
+    // Check if we need to move to next chunk
+    if (nextQuestionIndex >= currentChunk.questions.length) {
+      console.log(`[Chunking] Chunk ${currentChunkIndex} completed, moving to next chunk...`);
+      
+      const nextChunkIdx = currentChunkIndex + 1;
+      if (nextChunkIdx >= chunks.length) {
+        console.log("[Chunking] All chunks completed");
+        endInterview();
+        return;
+      }
 
-    displayMessage(nextQuestion.question, true);
-    
-    // Speak the question if voice is enabled
-    if (interviewConfig?.mode === "live") {
-      speakText(nextQuestion.question);
+      // Load next chunk
+      const nextChunk = await loadChunk(nextChunkIdx);
+      if (!nextChunk || nextChunk.questions.length === 0) {
+        console.log("[Chunking] No more questions available");
+        endInterview();
+        return;
+      }
+
+      setCurrentChunk(nextChunk);
+      setCurrentChunkIndex(nextChunkIdx);
+      setChunkQuestionIndex(0);
+
+      const question = nextChunk.questions[0];
+      setCurrentQuestion(question);
+      setStats((prev) => ({ ...prev, questionsAsked: prev.questionsAsked + 1 }));
+
+      // Play audio
+      if ((question as any).audioUrl) {
+        await playQuestionAudio((question as any).audioUrl);
+      }
+
+      // Preprocess next chunk in background
+      if (nextChunkIdx + 1 < chunks.length) {
+        preprocessNextChunk();
+      }
+
+      return;
     }
 
-    // Top-up batching if queue1 is low
-    const estimatedTotal = Math.max(
-      10,
-      Math.floor((interviewConfig?.duration || 30) / 2)
-    );
-    const batchThreshold = Math.max(3, Math.ceil(estimatedTotal * 0.2));
-    if (queues.queue1.length < batchThreshold) {
-      try {
-        const batch = await technicalInterviewAdapter.generateBatch(resumeData, batchThreshold);
-        if (batch.success && batch.questions?.length) {
-          setQueues((prev) => ({
-            ...prev,
-            queue1: [...prev.queue1, ...batch.questions!],
-          }));
-          setStats((prev) => ({
-            ...prev,
-            queue1Size: queues.queue1.length + batch.questions!.length,
-          }));
-        }
-      } catch (e) {
-        console.error("Batch top-up failed", e);
-      }
+    // Ask next question in current chunk
+    const question = currentChunk.questions[nextQuestionIndex];
+    setCurrentQuestion(question);
+    setChunkQuestionIndex(nextQuestionIndex);
+    setStats((prev) => ({ ...prev, questionsAsked: prev.questionsAsked + 1 }));
+
+    // Play audio
+    if ((question as any).audioUrl) {
+      await playQuestionAudio((question as any).audioUrl);
+    } else {
+      console.warn("[Audio] No audio URL for question:", question.id);
     }
   };
 
   const submitAnswer = async () => {
-    if (!userAnswer.trim() || !currentQuestion) return;
+    const answer = transcriptBufferRef.current.trim();
+    if (!answer || !currentQuestion) return;
 
-    const answer = userAnswer.trim();
-    setUserAnswer("");
-    displayMessage(answer, false);
+    // Clear the buffer
+    transcriptBufferRef.current = "";
 
     try {
       if (currentQuestion.category === "technical" && currentQuestion.answer) {
@@ -445,13 +482,8 @@ export default function VoiceInterviewPage() {
 
         if (analysis.updatedQueues) {
           setQueues(analysis.updatedQueues);
-          setStats((prev) => ({
-            ...prev,
-            queue1Size: analysis.updatedQueues!.queue1.length,
-            queue2Size: analysis.updatedQueues!.queue2.length,
-            queue3Size: analysis.updatedQueues!.queue3.length,
-          }));
         }
+        
         try {
           await technicalInterviewAdapter.persistQA(interviewId, {
             question_text: currentQuestion.question,
@@ -459,7 +491,7 @@ export default function VoiceInterviewPage() {
             user_answer: answer,
             correctness_score: analysis.correctness,
             question_type: currentQuestion.category as any,
-            queue_number: 1, // Base question from Queue 1
+            queue_number: 1,
             timestamp: new Date(),
             source_urls: [],
           });
@@ -468,43 +500,42 @@ export default function VoiceInterviewPage() {
         }
       }
 
-      // Wait a bit before asking next question
-      setTimeout(() => askNextQuestion(), 1000);
+      // Ask next question after a brief pause
+      setTimeout(() => askNextQuestion(), 1500);
     } catch (error) {
       console.error("Error submitting answer:", error);
-      // Continue with next question even if analysis fails
-      setTimeout(() => askNextQuestion(), 1000);
+      setTimeout(() => askNextQuestion(), 1500);
     }
   };
 
   const endInterview = () => {
     // Stop all media streams
     stopRecording();
-    stopScreenShare();
+    stopMediaStream(streamRef.current);
     
-    // Stop any speech/audio playback
-    if (speechSynthesisRef.current) {
-      speechSynthesis.cancel();
+    // Stop audio player
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.stop();
     }
-    stopAudioPlayback();
     
     // Clear timer
     if (timerRef.current) {
       clearInterval(timerRef.current);
     }
+
+    // Log chunking stats
+    if (chunks.length > 0) {
+      const processedChunks = currentChunkIndex + 1;
+      const totalChunks = chunks.length;
+      const savedChunks = totalChunks - processedChunks;
+      const savedPercentage = ((savedChunks / totalChunks) * 100).toFixed(1);
+      
+      console.log(`[Chunking] Interview ended:`);
+      console.log(`  - Processed: ${processedChunks}/${totalChunks} chunks`);
+      console.log(`  - Saved: ${savedChunks} chunks (${savedPercentage}%)`);
+    }
     
     setCurrentScreen("complete");
-  };
-
-  const getDifficultyColor = (difficulty?: string) => {
-    switch (difficulty) {
-      case "medium":
-        return "bg-yellow-500/20 text-yellow-300 border-yellow-500/30";
-      case "hard":
-        return "bg-red-500/20 text-red-300 border-red-500/30";
-      default:
-        return "bg-blue-500/20 text-blue-300 border-blue-500/30";
-    }
   };
 
   return (
@@ -540,110 +571,191 @@ export default function VoiceInterviewPage() {
 
           {/* Interview Screen */}
           {currentScreen === "interview" && (
-            <div className="p-6">
-              {/* Timer and Voice Controls */}
-              <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col h-[calc(100vh-200px)]">
+              {/* Top Bar - Timer and Status */}
+              <div className="flex justify-between items-center px-6 py-4 border-b border-white/10 bg-gradient-to-r from-white/5 to-white/10">
                 <div className="flex items-center gap-4">
-                  <div className="bg-white/10 px-4 py-2 rounded-full border border-white/20">
+                  {/* Timer */}
+                  <div className="bg-gradient-to-r from-indigo-500/20 to-purple-500/20 px-5 py-2.5 rounded-full border border-indigo-500/30 shadow-lg">
                     <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-indigo-400" />
-                      <span className="text-white font-mono text-lg">
+                      <Clock className="w-5 h-5 text-indigo-300" />
+                      <span className="text-white font-mono text-xl font-semibold">
                         {formatTime(timeRemaining)}
                       </span>
                     </div>
                   </div>
                   
-                  {/* Voice Controls */}
-                  <div className="flex items-center gap-2">
-                    <Button
-                      onClick={isRecording ? stopRecording : startRecording}
-                      variant="outline"
-                      size="sm"
-                      className={`border-white/20 ${
-                        isRecording
-                          ? "bg-red-500/20 text-red-300"
-                          : "bg-white/10 text-white"
-                      }`}
-                    >
-                      {isRecording ? (
-                        <MicOff className="w-4 h-4" />
-                      ) : (
-                        <Mic className="w-4 h-4" />
-                      )}
-                    </Button>
-                    
-                    <Button
-                      onClick={toggleMute}
-                      variant="outline"
-                      size="sm"
-                      className={`border-white/20 ${
-                        isMuted
-                          ? "bg-red-500/20 text-red-300"
-                          : "bg-white/10 text-white"
-                      }`}
-                    >
-                      {isMuted ? (
-                        <VolumeX className="w-4 h-4" />
-                      ) : (
-                        <Volume2 className="w-4 h-4" />
-                      )}
-                    </Button>
-                    
-                    {/* Stop Interview */}
-                      <Button
-                      onClick={endInterview}
-                      variant="destructive"
-                        size="sm"
-                      className="border-white/20 bg-red-500/20 text-red-300 hover:bg-red-500/30"
-                    >
-                      Stop
-                      </Button>
+                  {/* Questions Counter */}
+                  <div className="bg-white/10 px-5 py-2.5 rounded-full border border-white/20">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                      <span className="text-white text-sm font-medium">
+                        Question {stats.questionsAsked}
+                      </span>
+                    </div>
                   </div>
                 </div>
                 
                 {/* Speaking Indicator */}
                 {isSpeaking && (
-                  <div className="flex items-center gap-2 bg-indigo-500/20 px-3 py-1 rounded-full border border-indigo-500/30">
-                    <div className="w-2 h-2 bg-indigo-400 rounded-full animate-pulse"></div>
-                    <span className="text-indigo-300 text-sm">AI Speaking</span>
+                  <div className="flex items-center gap-2 bg-indigo-500/20 px-4 py-2.5 rounded-full border border-indigo-500/40 shadow-lg animate-pulse">
+                    <Volume2 className="w-5 h-5 text-indigo-300 animate-bounce" />
+                    <span className="text-indigo-200 text-sm font-medium">AI is speaking...</span>
+                  </div>
+                )}
+                
+                {/* Recording Indicator */}
+                {isRecording && !isSpeaking && (
+                  <div className="flex items-center gap-2 bg-red-500/20 px-4 py-2.5 rounded-full border border-red-500/40">
+                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                    <span className="text-red-200 text-sm font-medium">Listening...</span>
                   </div>
                 )}
               </div>
 
-              {/* Video Processing (camera preview and detection) */}
-              {interviewConfig?.proctoring.cameraRequired && (
-                <div className="mb-6">
-                  <VideoProcessing />
+              {/* Main Video Grid - Google Meet Style */}
+              <div className="flex-1 p-8 flex items-center justify-center gap-6 bg-gradient-to-br from-[#0A0A18] to-[#0D0D20]">
+                {/* AI Avatar Box - Left */}
+                <div className="relative w-full max-w-2xl h-[500px] rounded-3xl overflow-hidden bg-gradient-to-br from-indigo-900/20 to-purple-900/20 border-2 border-indigo-500/30 shadow-2xl hover:shadow-indigo-500/20 transition-all duration-300">
+                  {/* AI Avatar Placeholder */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center p-8">
+                    {/* Avatar Circle */}
+                    <div className="relative mb-6">
+                      <div className="w-32 h-32 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-2xl">
+                        <svg className="w-20 h-20 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                      </div>
+                      {/* Pulse Ring */}
+                      {isSpeaking && (
+                        <div className="absolute inset-0 rounded-full bg-indigo-500/30 animate-ping"></div>
+                      )}
+                    </div>
+                    
+                    {/* AI Name */}
+                    <div className="text-center">
+                      <h3 className="text-2xl font-bold text-white mb-2">AI Interviewer</h3>
+                      <p className="text-indigo-300 text-sm">Technical Assessment</p>
+                    </div>
+                    
+                    {/* Current Question Display */}
+                    {currentQuestion && (
+                      <div className="mt-8 max-w-lg">
+                        <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-6 border border-white/20">
+                          <p className="text-white/90 text-center leading-relaxed">
+                            {currentQuestion.question}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Name Tag */}
+                  <div className="absolute bottom-6 left-6 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/20">
+                    <span className="text-white font-medium text-sm">AI Interviewer</span>
+                  </div>
                 </div>
-              )}
 
-              {/* Stats */}
-              <StatsCards
-                questionsAsked={stats.questionsAsked}
-                queue1Size={stats.queue1Size}
-                queue2Size={stats.queue2Size}
-                queue3Size={stats.queue3Size}
-              />
+                {/* Candidate Video Box - Right */}
+                <div className="relative w-full max-w-2xl h-[500px] rounded-3xl overflow-hidden bg-gradient-to-br from-slate-900/20 to-slate-800/20 border-2 border-white/20 shadow-2xl hover:shadow-white/10 transition-all duration-300">
+                  {/* Video Preview */}
+                  {interviewConfig?.proctoring.cameraRequired ? (
+                    <div className="absolute inset-0">
+                      <VideoProcessing />
+                    </div>
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="text-center">
+                        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center mb-4 mx-auto">
+                          <span className="text-4xl font-bold text-white">
+                            {resumeData.charAt(0).toUpperCase() || "C"}
+                          </span>
+                        </div>
+                        <p className="text-white/60">Camera Off</p>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Name Tag */}
+                  <div className="absolute bottom-6 left-6 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/20">
+                    <span className="text-white font-medium text-sm">You</span>
+                  </div>
+                  
+                  {/* Microphone Status */}
+                  <div className="absolute top-6 right-6">
+                    {isMuted ? (
+                      <div className="bg-red-500/80 backdrop-blur-md p-3 rounded-full">
+                        <MicOff className="w-5 h-5 text-white" />
+                      </div>
+                    ) : isRecording ? (
+                      <div className="bg-green-500/80 backdrop-blur-md p-3 rounded-full animate-pulse">
+                        <Mic className="w-5 h-5 text-white" />
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
 
-              {/* Chat Container */}
-              <ChatList items={conversation} />
-
-              {/* Bottom control bar (Meet-like) */}
-              <ControlBar
-                isRecording={isRecording}
-                onStartRecording={startRecording}
-                onStopRecording={stopRecording}
-                timeRemainingLabel={formatTime(timeRemaining)}
-                onEnd={endInterview}
-              />
-
-              {/* Queues Panel */}
-              <QueuesPanel
-                queue1={queues.queue1}
-                queue2={queues.queue2}
-                queue3={queues.queue3}
-                getDifficultyColor={getDifficultyColor}
-              />
+              {/* Bottom Control Bar - Google Meet Style */}
+              <div className="border-t border-white/10 px-6 py-6 bg-gradient-to-r from-white/5 to-white/10">
+                <div className="flex items-center justify-center gap-6">
+                  {/* Microphone Toggle */}
+                  <div className="flex flex-col items-center gap-2">
+                    <Button
+                      onClick={isRecording ? stopRecording : startRecording}
+                      size="lg"
+                      className={`rounded-full w-16 h-16 transition-all duration-200 shadow-lg ${
+                        isRecording
+                          ? "bg-white/20 hover:bg-white/30 text-white border-2 border-white/40"
+                          : "bg-red-500/80 hover:bg-red-600 text-white border-2 border-red-400/50"
+                      }`}
+                    >
+                      {isRecording ? (
+                        <Mic className="w-7 h-7" />
+                      ) : (
+                        <MicOff className="w-7 h-7" />
+                      )}
+                    </Button>
+                    <span className="text-white/60 text-xs font-medium">
+                      {isRecording ? "Mute" : "Unmute"}
+                    </span>
+                  </div>
+                  
+                  {/* Volume Toggle */}
+                  <div className="flex flex-col items-center gap-2">
+                    <Button
+                      onClick={handleToggleMute}
+                      size="lg"
+                      className={`rounded-full w-16 h-16 transition-all duration-200 shadow-lg ${
+                        isMuted
+                          ? "bg-red-500/80 hover:bg-red-600 text-white border-2 border-red-400/50"
+                          : "bg-white/20 hover:bg-white/30 text-white border-2 border-white/40"
+                      }`}
+                    >
+                      {isMuted ? (
+                        <MicOff className="w-7 h-7" />
+                      ) : (
+                        <Volume2 className="w-7 h-7" />
+                      )}
+                    </Button>
+                    <span className="text-white/60 text-xs font-medium">
+                      {isMuted ? "Unmute Audio" : "Mute Audio"}
+                    </span>
+                  </div>
+                  
+                  {/* End Interview */}
+                  <div className="flex flex-col items-center gap-2">
+                    <Button
+                      onClick={endInterview}
+                      size="lg"
+                      className="rounded-full bg-red-500 hover:bg-red-600 text-white px-10 h-16 font-semibold shadow-lg border-2 border-red-400/50 transition-all duration-200"
+                    >
+                      End Interview
+                    </Button>
+                    <span className="text-white/60 text-xs font-medium">Leave</span>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 

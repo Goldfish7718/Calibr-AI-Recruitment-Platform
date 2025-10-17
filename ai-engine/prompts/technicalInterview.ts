@@ -1,3 +1,47 @@
+// Gemini prompts for technical interview (moved from utils/interview.ts)
+
+export const IDEAL_ANSWER_PROMPT = (question: string) => `For this technical question, provide a comprehensive ideal answer with supporting sources:
+
+Question: ${question}
+
+Generate:
+1. A detailed, technically accurate ideal answer
+2. 2-3 authoritative source URLs that verify the answer (documentation, official sites, reputable tech resources)
+
+Return ONLY a JSON object:
+{
+  "ideal_answer": "comprehensive technical answer",
+  "source_urls": [
+    "https://example.com/source1",
+    "https://example.com/source2"
+  ]
+}
+
+Ensure sources are real, authoritative URLs (e.g., MDN, official documentation, Stack Overflow, tech blogs).`;
+
+export const EVALUATE_ANSWER_PROMPT = (question: string, idealAnswer: string, userAnswer: string) => `Compare these answers and determine correctness percentage:
+
+Question: ${question}
+Ideal Answer: ${idealAnswer}
+User's Answer: ${userAnswer}
+
+Analyze the user's answer against the ideal answer. Consider:
+- Technical accuracy
+- Completeness of explanation
+- Correct terminology usage
+- Conceptual understanding
+
+Return ONLY a JSON object:
+{
+  "correctness": 85,
+  "reason": "Brief explanation of scoring",
+  "route_action": "next_difficulty"
+}
+
+Where:
+- correctness: 0-100 score
+- reason: Brief explanation
+- route_action: "next_difficulty" (≥80%), "normal_flow" (10-80%), or "followup" (≤10%)`;
 export const buildQueue1Prompt = (resume: string): string => `Analyze this resume and generate comprehensive interview questions covering ALL these categories:
 
 Resume:

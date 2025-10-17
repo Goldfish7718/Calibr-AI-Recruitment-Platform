@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { createInterviewEngine } from "./engine";
 import type { EngineAdapter, Queues, Question } from "./types";
-import { useChunkManager } from "./useChunkManager";
+
 
 export interface UseInterviewEngineOptions {
   adapter: EngineAdapter;
@@ -21,6 +21,7 @@ export function useInterviewEngine(
     ? adapterOrOptions
     : { adapter: adapterOrOptions, useVideoProcessing, enableChunking: false };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars, unused-imports/no-unused-vars
   const { adapter, enableChunking = false, interviewId = '' } = options;
   const videoProcessing = options.useVideoProcessing ?? useVideoProcessing;
 
@@ -29,26 +30,11 @@ export function useInterviewEngine(
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(engine.state.currentQuestion);
   const [stats, setStats] = useState(engine.state.stats);
 
-  // Initialize chunk manager if chunking enabled
-  const chunkManager = useChunkManager({
-    interviewId,
-    queues,
-    enabled: enableChunking,
-  });
-
   const sync = () => {
     setQueuesState({ ...engine.state.queues });
     setCurrentQuestion(engine.state.currentQuestion);
     
-    // Update stats with chunk info
-    const updatedStats = { ...engine.state.stats };
-    if (enableChunking) {
-      updatedStats.currentChunk = chunkManager.chunkState.currentChunk;
-      updatedStats.totalChunks = chunkManager.chunkState.totalChunks;
-      updatedStats.chunksPreprocessed = chunkManager.preprocessingProgress.preprocessed;
-      updatedStats.preprocessingInProgress = chunkManager.chunkState.preprocessingInProgress;
-    }
-    setStats(updatedStats);
+    setStats({ ...engine.state.stats });
   };
 
   const askNext = async () => {
@@ -80,9 +66,6 @@ export function useInterviewEngine(
   };
 
   const endInterview = () => {
-    if (enableChunking) {
-      chunkManager.endInterview();
-    }
     engine.state.stats.interviewEnded = true;
     sync();
   };
@@ -98,8 +81,7 @@ export function useInterviewEngine(
     checkQueue0,
     endInterview,
     adapter: engine.adapter,
-    // Chunking-specific
-    chunkManager: enableChunking ? chunkManager : undefined,
+  // Chunking-specific (removed)
   };
 }
 

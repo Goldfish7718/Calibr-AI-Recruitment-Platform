@@ -1,4 +1,11 @@
+// Allow chunkActions.ts to use audioUrl on Question for chunk storage
+declare module "@/utils/interview" {
+  interface Question {
+    audioUrl?: string;
+  }
+}
 import { getGeminiResponse } from "@/ai-engine/ai-call/aiCall";
+import { IDEAL_ANSWER_PROMPT, EVALUATE_ANSWER_PROMPT } from "@/ai-engine/prompts/technicalInterview";
 
 export interface Question {
   id: string;
@@ -138,25 +145,7 @@ export interface EvaluationResult {
  * Generate ideal answer with source URLs for a question
  */
 export async function generateIdealAnswer(question: string): Promise<{ ideal_answer: string; source_urls: string[] } | null> {
-  const prompt = `For this technical question, provide a comprehensive ideal answer with supporting sources:
-
-Question: ${question}
-
-Generate:
-1. A detailed, technically accurate ideal answer
-2. 2-3 authoritative source URLs that verify the answer (documentation, official sites, reputable tech resources)
-
-Return ONLY a JSON object:
-{
-  "ideal_answer": "comprehensive technical answer",
-  "source_urls": [
-    "https://example.com/source1",
-    "https://example.com/source2"
-  ]
-}
-
-Ensure sources are real, authoritative URLs (e.g., MDN, official documentation, Stack Overflow, tech blogs).`;
-
+  const prompt = IDEAL_ANSWER_PROMPT(question);
   try {
     const result = await callGeminiAPI(prompt);
     if (!result) return null;
@@ -202,30 +191,7 @@ export async function evaluateAnswer(
     }
 
     // Evaluate correctness
-    const analysisPrompt = `Compare these answers and determine correctness percentage:
-
-Question: ${question}
-Ideal Answer: ${finalIdealAnswer}
-User's Answer: ${userAnswer}
-
-Analyze the user's answer against the ideal answer. Consider:
-- Technical accuracy
-- Completeness of explanation
-- Correct terminology usage
-- Conceptual understanding
-
-Return ONLY a JSON object:
-{
-  "correctness": 85,
-  "reason": "Brief explanation of scoring",
-  "route_action": "next_difficulty"
-}
-
-Where:
-- correctness: 0-100 score
-- reason: Brief explanation
-- route_action: "next_difficulty" (≥80%), "normal_flow" (10-80%), or "followup" (≤10%)`;
-
+    const analysisPrompt = EVALUATE_ANSWER_PROMPT(question, finalIdealAnswer, userAnswer);
     const analysisResult = await callGeminiAPI(analysisPrompt);
     if (!analysisResult) {
       return {
@@ -260,4 +226,13 @@ Where:
     console.error('Error evaluating answer:', error);
     return null;
   }
+}
+
+/**
+ * Format time from seconds to MM:SS
+ */
+export function formatTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }

@@ -102,7 +102,17 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
 
   /**
    * Ask next question following priority rules
-   * Priority: Queue 0 check → Queue 3 → Queue 1 → Queue 2 (medium/hard progression)
+   * 
+   * Priority Order:
+   * 1. Queue 0 check (video violations)
+   * 2. Queue 3 (follow-ups from low-scoring answers or mood triggers)
+   * 3. Queue 1 (base questions + promoted medium/hard questions)
+   * 
+   * Note: Queue 2 (depth questions) is NOT directly polled.
+   * Medium/hard questions are promoted FROM Queue 2 TO Queue 1 when:
+   * - User scores ≥80% on base question → medium promoted
+   * - User scores ≥80% on medium → hard promoted
+   * This ensures depth questions are only asked when candidate demonstrates competency.
    */
   const askNext = async (): Promise<Question | null> => {
     // PRIORITY 1: Check Queue 0 for violations
@@ -121,13 +131,14 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
       next = q.queue3[0];
       queueKey = 'queue3';
     } 
-    // PRIORITY 3: Queue 1 (Base questions)
+    // PRIORITY 3: Queue 1 (Base questions + promoted depth questions)
     else if (q.queue1.length > 0) {
       next = q.queue1[0];
       queueKey = 'queue1';
     }
-    // No questions available
+    // No questions available - interview complete
     else {
+      state.stats.interviewEnded = true;
       return null;
     }
 
@@ -156,6 +167,14 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
 
   /**
    * Handle answer analysis and queue updates based on flow rules
+   * 
+   * End Flow Conditions:
+   * 1. All chunks completed (no more questions in Queue 1)
+   * 2. User explicitly requests end ("end this interview", "stop the interview")
+   * 3. Violations ≥ 3 (checked in Queue 0)
+   * 4. Final closing non-technical question asked (outro question)
+   * 
+   * @returns { correctness, shouldEnd }
    */
   const handleAnswer = async (
     question: string,

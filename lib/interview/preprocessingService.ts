@@ -3,8 +3,12 @@
  * Handles background preprocessing of interview chunks
  */
 
-import type { ChunkData } from "./chunkManager";
+import type { ChunkData } from "./simpleChunkManager";
 import { generateIdealAnswer } from "@/utils/interview";
+import {
+  generateAndUploadTTSAudio,
+  storePreprocessedChunk,
+} from "@/app/assessment/technical-interview/chunkActions";
 
 export interface PreprocessingResult {
   success: boolean;
@@ -15,13 +19,15 @@ export interface PreprocessingResult {
 }
 
 /**
- * Preprocess a single chunk: generate ideal answers and TTS audio
+ * Preprocess a single chunk: generate ideal answers and TTS audio, then store in DB
  * @param chunk - The chunk to preprocess
- * @param _interviewId - Interview ID (reserved for future use: S3 uploads, database storage)
+ * @param interviewId - Interview ID for S3 uploads and database storage
+ * @param interviewType - Type of interview (technical or hr)
  */
 export async function preprocessChunk(
   chunk: ChunkData,
- // _interviewId: string
+  interviewId: string,
+  interviewType: "technical" | "hr" = "technical"
 ): Promise<PreprocessingResult> {
   const startTime = Date.now();
 
@@ -53,16 +59,24 @@ export async function preprocessChunk(
           }
         }
 
-        // Step 2: Generate TTS audio for question
+        // Step 2: Generate TTS audio and upload to S3
         console.log(
           `[Chunk ${
             chunk.chunkNumber
-          }] Generating TTS for: ${question.question.substring(0, 50)}...`
+          }] Generating and uploading TTS for: ${question.question.substring(0, 50)}...`
         );
-        const audioUrl = await generateTTSAudio(question.question);
+        const audioUrl = await generateAndUploadTTSAudio(
+          question.question,
+          question.id,
+          interviewId,
+          interviewType
+        );
 
         if (audioUrl) {
           audioUrls.set(question.id, audioUrl);
+          console.log(
+            `[Chunk ${chunk.chunkNumber}] ✓ Audio uploaded for question ${question.id}`
+          );
         }
       } catch (error) {
         console.error(
@@ -73,9 +87,22 @@ export async function preprocessChunk(
       }
     }
 
+    // Step 3: Store preprocessed chunk in database
+    console.log(`[Chunk ${chunk.chunkNumber}] Storing in database...`);
+    await storePreprocessedChunk(
+      interviewId,
+      chunk.chunkNumber,
+      chunk.questions,
+      audioUrls,
+      interviewType
+    );
+
     const duration = Date.now() - startTime;
     console.log(
-      `[Chunk ${chunk.chunkNumber}] Preprocessing completed in ${duration}ms`
+      `[Chunk ${chunk.chunkNumber}] ✓ Preprocessing complete in ${duration}ms`
+    );
+    console.log(
+      `[Chunk ${chunk.chunkNumber}] Generated ${audioUrls.size}/${chunk.questions.length} audio files`
     );
 
     return {
@@ -95,52 +122,24 @@ export async function preprocessChunk(
   }
 }
 
-/**
- * Generate TTS audio and return URL/path
- * Uses the existing /api/generate-audio endpoint
- */
-async function generateTTSAudio(text: string): Promise<string | null> {
-  try {
-    const response = await fetch("/api/generate-audio", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ text }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`TTS API failed: ${response.status}`);
-    }
-
-    // Get audio blob
-    const audioBlob = await response.blob();
-
-    // In a real implementation, you'd upload this to S3/CDN
-    // For now, we'll create a blob URL (client-side only)
-    // TODO: Implement S3 upload for server-side storage
-    const audioUrl = URL.createObjectURL(audioBlob);
-
-    return audioUrl;
-  } catch (error) {
-    console.error("TTS generation failed:", error);
-    return null;
-  }
-}
+// TTS generation is now handled by generateAndUploadTTSAudio in chunkActions.ts
+// No need for local blob URLs - everything goes to S3
 
 /**
  * Preprocess chunk in background (non-blocking)
  * @param chunk - The chunk to preprocess
- * @param _interviewId - Interview ID (reserved for future use)
+ * @param interviewId - Interview ID for S3 uploads and database storage
+ * @param interviewType - Type of interview (technical or hr)
  * @param onComplete - Callback when preprocessing completes
  */
 export function preprocessChunkInBackground(
   chunk: ChunkData,
-  _interviewId: string,
+  interviewId: string,
+  interviewType: "technical" | "hr",
   onComplete: (result: PreprocessingResult) => void
 ): void {
   // Start preprocessing asynchronously
-  preprocessChunk(chunk)
+  preprocessChunk(chunk, interviewId, interviewType)
     .then(onComplete)
     .catch((error) => {
       console.error("Background preprocessing error:", error);
@@ -155,19 +154,20 @@ export function preprocessChunkInBackground(
 /**
  * Batch preprocess multiple chunks sequentially
  * @param chunks - Array of chunks to preprocess
- * @param _interviewId - Interview ID (reserved for future use)
+ * @param interviewId - Interview ID for S3 uploads and database storage
+ * @param interviewType - Type of interview (technical or hr)
  * @param onProgress - Optional progress callback
  */
 export async function batchPreprocessChunks(
   chunks: ChunkData[],
-  _interviewId: string,
+  interviewId: string,
+  interviewType: "technical" | "hr",
   onProgress?: (completed: number, total: number) => void
 ): Promise<PreprocessingResult[]> {
   const results: PreprocessingResult[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
-  //  const result = await preprocessChunk(chunks[i], _interviewId);
-   const result = await preprocessChunk(chunks[i],);
+    const result = await preprocessChunk(chunks[i], interviewId, interviewType);
     results.push(result);
 
     if (onProgress) {
