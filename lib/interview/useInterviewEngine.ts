@@ -81,7 +81,6 @@ export function useInterviewEngine(
     checkQueue0,
     endInterview,
     adapter: engine.adapter,
-  // Chunking-specific (removed)
   };
 }
 

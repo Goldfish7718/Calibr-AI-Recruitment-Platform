@@ -85,7 +85,6 @@ export interface EngineStats {
 export interface EngineAdapter {
   getConfig: (interviewId: string) => Promise<{ success: boolean; config?: any; error?: string }>;
   startEvaluation: (interviewId: string) => Promise<{ success: boolean; evaluationId?: string }>;
-  generateBatch: (resume: string, count: number) => Promise<{ success: boolean; questions?: Question[] }>;
   analyze: (
     question: string,
     correctAnswer: string,

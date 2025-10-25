@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { AlertCircle, Camera as CameraIcon } from "lucide-react";
 import { updateVideoState } from "@/lib/interview/videoQueueIntegration";
 
-export default function VideoProcessing() {
+export default function VideoProcessing({ autoStart = false }: { autoStart?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -146,14 +146,6 @@ export default function VideoProcessing() {
     if (updates.gesture) lastGesture.current = updates.gesture;
     if (updates.objects) lastObjects.current = updates.objects;
 
-    // === UPDATE QUEUE 0 (Video Integration) ===
-    // Send updates to the queue system for logging
-    updateVideoState({
-      mood: updates.mood,
-      gesture: updates.gesture,
-      objects: updates.objects
-    });
-
     // === MOOD LOGGING (Separate - not a violation) ===
     const currentMood =
       lastMood.current !== "neutral" ? lastMood.current : null;
@@ -191,6 +183,14 @@ export default function VideoProcessing() {
       });
 
       lastLoggedMood.current = currentMood;
+      
+      // === UPDATE QUEUE 0 - MOOD CHANGE ===
+      // Only store in DB when mood actually changes (not every frame)
+      updateVideoState({
+        mood: currentMood || undefined,
+        gesture: lastGesture.current || undefined,
+        objects: lastObjects.current
+      });
     }
 
     // === VIOLATION LOGGING (Gesture + Objects only) ===
@@ -271,6 +271,14 @@ export default function VideoProcessing() {
         if (gesturePersisted) lastLoggedGesture.current = currentGesture;
         if (objectsPersisted) lastLoggedObjects.current = currentObjects;
         lastLogTime.current = now;
+        
+        // === UPDATE QUEUE 0 - VIOLATION DETECTED ===
+        // Only store in DB when violation actually occurs (not every frame)
+        updateVideoState({
+          mood: lastMood.current || undefined,
+          gesture: currentGesture || undefined,
+          objects: currentObjects.length > 0 ? currentObjects : undefined
+        });
       }
     }
   };
@@ -370,6 +378,12 @@ export default function VideoProcessing() {
 
         // Don't initialize Holistic here - do it per session in startDetection
         setMediapipeLoaded(true);
+        
+        // Notify window that MediaPipe is loaded
+        if (typeof window !== 'undefined') {
+          (window as any).mediaPipeLoaded = true;
+          window.dispatchEvent(new Event('mediapipe-loaded'));
+        }
 
         // Init YOLO worker
         workerRef.current = new Worker(
@@ -380,6 +394,13 @@ export default function VideoProcessing() {
             updateLog({
               objects: smoothDetection(e.data.objects, objectsHistory),
             });
+          } else if (e.data.type === "yolo-ready") {
+            // Notify window that YOLO is loaded (only once)
+            if (typeof window !== 'undefined' && !(window as any).yoloLoaded) {
+              console.log("✅ YOLO model ready");
+              (window as any).yoloLoaded = true;
+              window.dispatchEvent(new Event('yolo-loaded'));
+            }
           }
         };
         workerRef.current.postMessage({ type: "load" });
@@ -425,7 +446,15 @@ export default function VideoProcessing() {
     };
   }, []);
 
-  /** Start detection */
+  /** Auto-start camera if autoStart prop is true */
+  useEffect(() => {
+    if (autoStart && mediapipeLoaded && cameraStatus === "idle" && !hasUsedCameraRef.current) {
+      console.log('[VideoProcessing] Auto-starting camera...');
+      startDetection();
+    }
+  }, [autoStart, mediapipeLoaded, cameraStatus]);
+
+  /** Stop detection */
   const startDetection = async () => {
     // If camera was used before, force a page refresh for reliability
     if (hasUsedCameraRef.current) {

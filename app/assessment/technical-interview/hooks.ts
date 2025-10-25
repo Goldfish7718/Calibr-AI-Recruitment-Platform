@@ -2,7 +2,6 @@
 
 import {
   getInterviewConfig as getInterviewConfigAction,
-  generateQuestionsBatch as generateQuestionsBatchAction,
   analyzeAnswer as analyzeAnswerAction,
   startEvaluation as startEvaluationAction,
   appendQA as appendQAAction,
@@ -11,10 +10,6 @@ import {
 export function useInterviewActions() {
   const getInterviewConfig = async (interviewId: string) => {
     return await getInterviewConfigAction(interviewId);
-  };
-
-  const generateQuestionsBatch = async (contextData: any, count: number) => {
-    return await generateQuestionsBatchAction(contextData, count);
   };
 
   const analyzeAnswer = async (
@@ -61,7 +56,6 @@ export function useInterviewActions() {
 
   return {
     getInterviewConfig,
-    generateQuestionsBatch,
     analyzeAnswer,
     startEvaluation,
     appendQA,

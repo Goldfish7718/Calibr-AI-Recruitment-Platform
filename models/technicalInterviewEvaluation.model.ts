@@ -6,7 +6,7 @@ export interface TechnicalInterviewEvaluation extends Document {
   assessmentId?: mongoose.Types.ObjectId | null;
   technicalInterviewId: mongoose.Types.ObjectId;
 
-  // Status tracking (similar to aptitude)
+  // Status tracking
   status: 'in_progress' | 'completed';
   
   // Timeline
@@ -18,46 +18,57 @@ export interface TechnicalInterviewEvaluation extends Document {
   audioUrl?: string;
   videoUrl?: string;
 
-  // QA entries captured during interview
-  entries?: {
+  // Video processing logs (Queue 0)
+  videoLogs: {
+    timestamp: Date;
+    mood?: string;
+    gesture?: string;
+    objects?: string[];
+    violationType?: string;
+  }[];
+
+  // NEW: Master Q1 questions array (basic data only, generated at start)
+  // Used for dynamic chunking: chunk = Math.floor(index / 5)
+  q1Questions: {
+    id: string;
     question: string;
-    correctAnswer?: string;
-    userAnswer: string;
-    correctness?: number; // 0-100
-    askedAt: Date;
-    // New fields for queue architecture
-    question_text?: string; // Alias for question
-    user_answer?: string; // Alias for userAnswer
-    ideal_answer?: string; // Alias for correctAnswer
-    correctness_score?: number; // Alias for correctness
-    source_urls?: string[];
-    question_type?: 'technical' | 'non-technical' | 'followup' | 'mood-triggered';
-    queue_number?: 0 | 1 | 2 | 3;
-    timestamp?: Date; // Alias for askedAt
-    // Queue 0 specific fields
-    mood_state?: string;
-    violation_snapshot?: {
-      violation_count: number;
-      current_violations: string[];
-    };
+    category: 'technical' | 'non-technical';
+    difficulty?: string;
+  }[];
+  
+  // Track which chunks have been preprocessed (to avoid re-preprocessing on resume)
+  preprocessedChunks: number[];
+
+  // NEW: Asked questions array (detailed schema, grows during interview)
+  // Contains Q1 questions after preprocessing + Q2 follow-ups + Q3 mood-triggered
+  askedQuestions: {
+    id: string;
+    question: string;
+    category: 'technical' | 'non-technical';
+    difficulty?: string;
+    queueType: 'Q1' | 'Q2' | 'Q3';  // Which queue this question belongs to
+    parentQuestionId?: string;  // For Q2/Q3, links back to parent Q1
+    askedAt?: Date;  // Timestamp for ordering (set when audio playback starts)
+    preprocessed: boolean;  // Has preprocessing completed? (for non-technical: no answer/sources needed)
+    
+    // Preprocessing data (filled during chunk preprocessing)
+    answer?: string;  // Ideal/correct answer (only for technical questions)
+    source_urls?: string[];  // Source URLs (only for technical questions)
+    audioUrl?: string;  // TTS audio URL from S3
+    
+    // User response data (filled after candidate answers)
+    userAnswer?: string;  // Candidate's answer
+    correctness?: number;  // 0-100 (only for technical questions)
   }[];
 
   // AI outputs
   aiSummary?: string;
-  aiScores?: { key: string; score: number }[]; // map to rubric categories
   overallScore?: number; // 0-100
   verdict?: 'pass' | 'borderline' | 'fail';
 
   // Observations
   notes?: { authorId?: mongoose.Types.ObjectId; text: string; createdAt: Date }[];
   flags?: { type: string; severity: 'low' | 'medium' | 'high'; message: string; createdAt: Date }[];
-
-  // Runtime diagnostics
-  diagnostics?: {
-    averageLatencyMs?: number;
-    disconnects?: number;
-    bitrateKbps?: number;
-  };
 
   createdAt: Date;
   updatedAt: Date;
@@ -83,31 +94,64 @@ const TechnicalInterviewEvaluationSchema: Schema = new Schema({
   audioUrl: { type: String },
   videoUrl: { type: String },
 
-  entries: [{
-    question: { type: String, required: true },
-    correctAnswer: { type: String },
-    userAnswer: { type: String, required: true },
-    correctness: { type: Number, min: 0, max: 100 },
-    askedAt: { type: Date, default: Date.now },
-    // New fields for queue architecture
-    question_text: { type: String },
-    user_answer: { type: String },
-    ideal_answer: { type: String },
-    correctness_score: { type: Number, min: 0, max: 100 },
-    source_urls: [{ type: String }],
-    question_type: { type: String, enum: ['technical', 'non-technical', 'followup', 'mood-triggered'] },
-    queue_number: { type: Number, enum: [0, 1, 2, 3] },
-    timestamp: { type: Date },
-    // Queue 0 specific fields
-    mood_state: { type: String },
-    violation_snapshot: {
-      violation_count: { type: Number, min: 0 },
-      current_violations: [{ type: String }]
-    }
-  }],
+  // Video processing logs (Queue 0)
+  videoLogs: {
+    type: [{
+      timestamp: { type: Date, required: true },
+      mood: { type: String },
+      gesture: { type: String },
+      objects: [{ type: String }],
+      violationType: { type: String },
+    }],
+    default: [],
+    required: true
+  },
+
+  // Master Q1 questions array (basic data only)
+  q1Questions: {
+    type: [{
+      id: { type: String, required: true },
+      question: { type: String, required: true },
+      category: { type: String, enum: ['technical', 'non-technical'], required: true },
+      difficulty: { type: String },
+    }],
+    default: [],
+    required: true
+  },
+  
+  // Track preprocessed chunks (updated after each chunk completes)
+  preprocessedChunks: {
+    type: [{ type: Number }],
+    default: [],
+    required: true
+  },
+
+  // Asked questions array (detailed schema with preprocessing data)
+  askedQuestions: {
+    type: [{
+      id: { type: String, required: true },
+      question: { type: String, required: true },
+      category: { type: String, enum: ['technical', 'non-technical'], required: true },
+      difficulty: { type: String },
+      queueType: { type: String, enum: ['Q1', 'Q2', 'Q3'], required: true },
+      parentQuestionId: { type: String },  // Links Q2/Q3 to parent Q1
+      askedAt: { type: Date },  // Optional - only set when audio playback starts
+      preprocessed: { type: Boolean, default: false },
+      
+      // Preprocessing data
+      answer: { type: String },  // Ideal answer
+      source_urls: [{ type: String }],
+      audioUrl: { type: String },  // S3 URL
+      
+      // User response data
+      userAnswer: { type: String },
+      correctness: { type: Number, min: 0, max: 100 },
+    }],
+    default: [],
+    required: true
+  },
 
   aiSummary: { type: String, maxlength: 20000 },
-  aiScores: [{ key: { type: String }, score: { type: Number, min: 0, max: 100 } }],
   overallScore: { type: Number, min: 0, max: 100 },
   verdict: { type: String, enum: ['pass', 'borderline', 'fail'] },
 
@@ -122,12 +166,6 @@ const TechnicalInterviewEvaluationSchema: Schema = new Schema({
     message: { type: String },
     createdAt: { type: Date, default: Date.now }
   }],
-
-  diagnostics: {
-    averageLatencyMs: { type: Number, min: 0 },
-    disconnects: { type: Number, min: 0 },
-    bitrateKbps: { type: Number, min: 0 }
-  }
 }, { timestamps: true });
 
 TechnicalInterviewEvaluationSchema.index({ candidateId: 1, technicalInterviewId: 1 });

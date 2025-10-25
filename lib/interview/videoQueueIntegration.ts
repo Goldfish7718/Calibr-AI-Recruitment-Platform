@@ -23,6 +23,17 @@ let videoState: VideoState = {
 
 let lastMoodState = 'neutral';
 
+// Callback for immediate log persistence (set by TechnicalInterviewClient)
+let onLogCreated: ((log: VideoLog) => void) | null = null;
+
+/**
+ * Set callback to be invoked immediately when a video log is created
+ * This allows real-time persistence for mood-based question generation
+ */
+export function setLogCallback(callback: ((log: VideoLog) => void) | null) {
+  onLogCreated = callback;
+}
+
 /**
  * Update video state from video-processing component
  * Call this from the video processing component when violations or mood changes
@@ -76,9 +87,15 @@ export function updateVideoState(update: {
   
   videoState.logs.push(log);
 
-  // Keep only last 100 logs
+  // Keep only last 100 logs in memory
   if (videoState.logs.length > 100) {
     videoState.logs = videoState.logs.slice(-100);
+  }
+
+  // IMMEDIATE PERSISTENCE: Invoke callback if registered
+  // This ensures logs are stored in DB right away for mood-based question generation
+  if (onLogCreated) {
+    onLogCreated(log);
   }
 }
 
@@ -125,6 +142,7 @@ export function resetVideoState() {
     current_violations: []
   };
   lastMoodState = 'neutral';
+  onLogCreated = null; // Clear callback on reset
 }
 
 /**
@@ -135,4 +153,14 @@ export function getViolationSnapshot() {
     violation_count: videoState.violation_count,
     current_violations: videoState.current_violations
   };
+}
+
+/**
+ * Get all accumulated logs (for periodic syncing to database)
+ * Returns a copy of logs and clears the internal buffer
+ */
+export function getAndClearLogs(): VideoLog[] {
+  const logs = [...videoState.logs];
+  videoState.logs = []; // Clear after retrieving
+  return logs;
 }

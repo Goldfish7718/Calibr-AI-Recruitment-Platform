@@ -150,15 +150,41 @@ export async function generateIdealAnswer(question: string): Promise<{ ideal_ans
     const result = await callGeminiAPI(prompt);
     if (!result) return null;
 
-    const jsonMatch = result.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
+    // Try to extract the first valid JSON object
+    let jsonString = '';
+    const firstCurly = result.indexOf('{');
+    const lastCurly = result.lastIndexOf('}');
+    if (firstCurly !== -1 && lastCurly !== -1 && lastCurly > firstCurly) {
+      jsonString = result.slice(firstCurly, lastCurly + 1);
+    } else {
+      // fallback: try regex
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) jsonString = jsonMatch[0];
+    }
+    if (!jsonString) {
+      console.warn('[generateIdealAnswer] No JSON found in Gemini response, falling back to raw text');
+      // Fallback: use the whole response as ideal answer (best-effort) if no JSON is provided
+      const raw = result.trim();
+      if (raw.length > 0) {
+        return { ideal_answer: raw, source_urls: [] };
+      }
+      return null;
+    }
+    // Sanitize JSON string - remove control characters and escape special chars
+    jsonString = jsonString.replace(/[\x00-\x1F\x7F-\x9F]/g, ''); // Remove control chars
+    jsonString = jsonString.replace(/\n/g, '\\n'); // Escape newlines
+    jsonString = jsonString.replace(/\r/g, '\\r'); // Escape carriage returns
+    jsonString = jsonString.replace(/\t/g, '\\t'); // Escape tabs
+    try {
+      const parsed = JSON.parse(jsonString);
       return {
         ideal_answer: parsed.ideal_answer || '',
         source_urls: parsed.source_urls || []
       };
+    } catch (err) {
+      console.error('[generateIdealAnswer] JSON parse error:', err, '\nRaw:', jsonString);
+      return null;
     }
-    return null;
   } catch (error) {
     console.error('Error generating ideal answer:', error);
     return null;
@@ -176,6 +202,12 @@ export async function evaluateAnswer(
   sourceUrls?: string[]
 ): Promise<EvaluationResult | null> {
   try {
+    // Edge case: If userAnswer is missing or empty, skip evaluation
+    if (!userAnswer || userAnswer.trim().length === 0) {
+      console.warn('[evaluateAnswer] User answer is missing, skipping evaluation');
+      return null;
+    }
+
     // Generate ideal answer if not provided
     let finalIdealAnswer = idealAnswer;
     let finalSources = sourceUrls || [];
@@ -186,7 +218,8 @@ export async function evaluateAnswer(
         finalIdealAnswer = generated.ideal_answer;
         finalSources = generated.source_urls;
       } else {
-        finalIdealAnswer = "No ideal answer available";
+        console.warn('[evaluateAnswer] Could not generate ideal answer, skipping evaluation');
+        return null;
       }
     }
 

@@ -1,35 +1,78 @@
 // Gemini prompts for technical interview (moved from utils/interview.ts)
 
-export const IDEAL_ANSWER_PROMPT = (question: string) => `For this technical question, provide a comprehensive ideal answer with supporting sources:
+export const IDEAL_ANSWER_PROMPT = (question: string) => `For this technical question, provide evaluation criteria or an ideal answer:
 
 Question: ${question}
 
-Generate:
-1. A detailed, technically accurate ideal answer
-2. 2-3 authoritative source URLs that verify the answer (documentation, official sites, reputable tech resources)
+IMPORTANT: Determine if this is a:
+1. **Knowledge-based question** (has definite technical answer) - Example: "What is React state management?"
+2. **Experience-based question** (personal/subjective) - Example: "Have you deployed applications to cloud platforms?"
+
+For KNOWLEDGE-BASED questions:
+- Provide a detailed, technically accurate answer
+- Include 2-3 authoritative source URLs
+
+For EXPERIENCE-BASED questions:
+- DO NOT provide a personal answer (like "As an AI, I...")
+- Instead, provide evaluation criteria (what makes a good answer)
+- Set ideal_answer to: "EVALUATE_DIRECTLY: [criteria for good answer]"
+- Leave source_urls empty
+
+CRITICAL TEXT FORMATTING FOR TTS:
+- DO NOT use asterisks (*) for emphasis - they will be read aloud
+- DO NOT use single quotes (') or double quotes (") around words - they will be spoken
+- Use plain natural language without markup
+- Write as if speaking naturally in conversation
 
 Return ONLY a JSON object:
 {
-  "ideal_answer": "comprehensive technical answer",
+  "ideal_answer": "comprehensive technical answer OR 'EVALUATE_DIRECTLY: criteria'",
   "source_urls": [
     "https://example.com/source1",
     "https://example.com/source2"
   ]
 }
 
+Examples:
+- Knowledge: "What is closure in JavaScript?" → Provide technical answer + sources
+- Experience: "Have you worked with AWS?" → "EVALUATE_DIRECTLY: Good answer demonstrates practical cloud deployment knowledge, mentions specific AWS services used, discusses challenges faced, and shows understanding of deployment concepts."
+
 Ensure sources are real, authoritative URLs (e.g., MDN, official documentation, Stack Overflow, tech blogs).`;
 
-export const EVALUATE_ANSWER_PROMPT = (question: string, idealAnswer: string, userAnswer: string) => `Compare these answers and determine correctness percentage:
+export const EVALUATE_ANSWER_PROMPT = (question: string, idealAnswer: string, userAnswer: string) => `Evaluate this interview answer:
 
 Question: ${question}
-Ideal Answer: ${idealAnswer}
+Evaluation Criteria: ${idealAnswer}
 User's Answer: ${userAnswer}
 
-Analyze the user's answer against the ideal answer. Consider:
-- Technical accuracy
-- Completeness of explanation
-- Correct terminology usage
-- Conceptual understanding
+IMPORTANT SCORING GUIDELINES:
+- Be LENIENT and GENEROUS with scoring - this is a real human under interview pressure
+- If the candidate shows UNDERSTANDING of the concept, score 50%+
+- If they mention the RIGHT concepts even with minor inaccuracies, score 60%+
+- Only score below 20% if the answer is completely wrong or irrelevant
+- Score 0-10% ONLY if answer is nonsensical or doesn't address the question at all
+
+IMPORTANT: Check if the evaluation criteria starts with "EVALUATE_DIRECTLY:":
+- If YES: This is an experience-based question. Evaluate based on the criteria provided (relevance, depth, practical understanding).
+- If NO: This is a knowledge-based question. Compare user's answer against the ideal answer for technical accuracy.
+
+For KNOWLEDGE-BASED questions, consider:
+- Core concept mentioned? → 50%+
+- Correct approach/methodology? → 60%+
+- Multiple relevant points? → 70%+
+- Best practices mentioned? → 80%+
+- Comprehensive with examples? → 90%+
+
+For EXPERIENCE-BASED questions, consider:
+- Shows practical experience? → 60%+
+- Mentions specific tools/technologies? → 70%+
+- Discusses real challenges/solutions? → 80%+
+- Demonstrates deep understanding? → 90%+
+
+SCORING EXAMPLES:
+- "I use JWT for auth" → 50-60% (shows understanding, needs more detail)
+- "I use JWT tokens to secure APIs, store them in httpOnly cookies" → 70-80% (good practical approach)
+- "JWT for stateless auth, refresh tokens for security, httpOnly cookies to prevent XSS" → 85-95% (comprehensive)
 
 Return ONLY a JSON object:
 {
@@ -39,9 +82,10 @@ Return ONLY a JSON object:
 }
 
 Where:
-- correctness: 0-100 score
-- reason: Brief explanation
-- route_action: "next_difficulty" (≥80%), "normal_flow" (10-80%), or "followup" (≤10%)`;
+- correctness: 0-100 score (be GENEROUS - real humans make mistakes under pressure)
+- reason: Brief explanation (1-2 sentences)
+- route_action: "next_difficulty" (≥50% - LOWERED from 80%), "normal_flow" (10-50%), or "followup" (≤10%)`;
+
 export const buildQueue1Prompt = (
   jobData: {
     title: string;
@@ -63,134 +107,141 @@ export const buildQueue1Prompt = (
   }
 ): string => {
   const jobContext = `
-JOB OPPORTUNITY:
-- Title: ${jobData.title}
-- Position: ${jobData.position}
+JOB CONTEXT (for AI use only - don't mention explicitly):
+- Position: ${jobData.position} (${jobData.seniority} level)
 - Department: ${jobData.department}
-- Seniority Level: ${jobData.seniority}
-- Required Tech Stack: ${jobData.techStack.join(', ')}
-${jobData.description ? `- Description: ${jobData.description}` : ''}
-${jobData.requirements ? `- Requirements: ${jobData.requirements}` : ''}
+- Required Skills: ${jobData.techStack.join(', ')}
+${jobData.description ? `- Overview: ${jobData.description}` : ''}
+${jobData.requirements ? `- Key Requirements: ${jobData.requirements}` : ''}
 `;
 
   const resumeContext = `
-CANDIDATE PROFILE:
-${resumeData.tagline ? `- Tagline: ${resumeData.tagline}` : ''}
-${resumeData.summary ? `- Summary: ${resumeData.summary}` : ''}
+CANDIDATE BACKGROUND (for AI use only - don't mention explicitly):
+${resumeData.summary ? `- Background: ${resumeData.summary}` : ''}
 ${resumeData.skills ? `- Skills: ${resumeData.skills}` : ''}
-${resumeData.education && resumeData.education.length > 0 ? `- Education: ${resumeData.education.map(e => `${e.degree} from ${e.institution} (${e.year})`).join('; ')}` : ''}
-${resumeData.workDetails && resumeData.workDetails.length > 0 ? `- Work Experience: ${resumeData.workDetails.map(w => `${w.position} at ${w.company} - ${w.description}`).join('; ')}` : ''}
-${resumeData.projects && resumeData.projects.length > 0 ? `- Projects: ${resumeData.projects.map(p => `${p.name}: ${p.description}`).join('; ')}` : ''}
-${resumeData.certificates && resumeData.certificates.length > 0 ? `- Certifications: ${resumeData.certificates.map(c => `${c.name} from ${c.issuer}`).join('; ')}` : ''}
+${resumeData.education && resumeData.education.length > 0 ? `- Education: ${resumeData.education.map(e => `${e.degree} from ${e.institution}`).join('; ')}` : ''}
+${resumeData.workDetails && resumeData.workDetails.length > 0 ? `- Experience: ${resumeData.workDetails.map(w => `${w.position} at ${w.company}`).join('; ')}` : ''}
+${resumeData.projects && resumeData.projects.length > 0 ? `- Projects: ${resumeData.projects.map(p => p.name).join(', ')}` : ''}
 `;
 
-  return `You are conducting a technical interview for the following position. Generate comprehensive, tailored interview questions based on BOTH the job requirements AND the candidate's background.
+  return `You are conducting a natural, conversational technical interview. Use the context below to generate relevant questions, but NEVER explicitly mention "the job posting", "your resume", or "the position requirements" in the questions themselves.
 
 ${jobContext}
 
 ${resumeContext}
 
-INTERVIEW STRUCTURE:
-Generate questions that:
-1. **Assess fit for the specific role** - Focus on ${jobData.position} responsibilities and ${jobData.seniority} level expectations
-2. **Match required tech stack** - Prioritize questions about: ${jobData.techStack.join(', ')}
-3. **Explore candidate's experience** - Deep dive into their mentioned projects, work experience, and skills
-4. **Progressive difficulty** - Start with fundamentals, move to advanced concepts based on seniority (${jobData.seniority})
-5. **Real-world scenarios** - Include practical problems relevant to ${jobData.department} department
+CRITICAL INTERVIEW FLOW:
+1. START with a warm introduction question (e.g., "Tell me about yourself" or "Walk me through your background")
+2. Then ask natural technical questions based on their experience and the role's needs
+3. Questions should sound like normal conversation, not scripted from documents
+4. Focus on ${jobData.techStack.slice(0, 3).join(', ')} but don't list them mechanically
+5. Explore their mentioned experience naturally
 
-QUESTION CATEGORIES (15-20 questions total):
-1. Introduction & Role Understanding (2-3 questions)
-2. Tech Stack Deep Dive - ${jobData.techStack.slice(0, 3).join(', ')} (5-7 questions)
-3. Candidate's Projects & Experience (3-4 questions) 
-4. Problem-Solving & System Design for ${jobData.position} (3-4 questions)
-5. Advanced Concepts for ${jobData.seniority} level (2-3 questions)
+QUESTION GUIDELINES:
+- Keep questions conversational and human-like
+- Don't say "According to your resume" or "The position requires"
+- Ask about their experience directly (e.g., "How have you worked with React?" not "Your resume mentions React, can you explain...")
+- Don't repeat the same tech stack list in every question
+- Mix conceptual understanding with practical experience
+- Difficulty should match ${jobData.seniority} level naturally
 
-For TECHNICAL questions, you MUST provide the correct answer.
+CRITICAL TEXT FORMATTING FOR TTS:
+- DO NOT use asterisks (*) for emphasis - they will be read aloud
+- DO NOT use single quotes (') or double quotes (") around words - they will be spoken
+- Use plain natural language without markup or special characters
+- Write questions as if speaking naturally in conversation
+- Avoid markdown formatting, bullet points with asterisks, or quoted phrases
 
-Return ONLY a JSON array in this exact format:
-[
-  {"question": "Tell me about your experience with [specific tech from their resume] and how it applies to [job requirement]", "category": "non-technical", "answer": ""},
-  {"question": "Explain [core concept from required tech stack] and how you would use it in a ${jobData.position} role", "category": "technical", "answer": "detailed technical answer"},
-  {"question": "Walk me through your [specific project from resume]. What challenges did you face?", "category": "non-technical", "answer": ""}
-]
+Generate 15-18 questions total following this structure:
+1. Introduction (1 question): Warm, open-ended
+2. Core Technical Skills (6-8 questions): Natural questions about key technologies
+3. Experience & Projects (3-4 questions): Dig into their work naturally
+4. Problem Solving (2-3 questions): Scenario-based, conversational
+5. Advanced Topics (2-3 questions): Deeper technical concepts for ${jobData.seniority}
 
-CRITICAL: 
-- Ensure at least 80% are technical questions
-- Tailor difficulty to ${jobData.seniority} level (junior=basics, mid=intermediate+design, senior=architecture+optimization)
-- Reference specific items from candidate's resume to make questions personal
-- Focus heavily on ${jobData.techStack.join(', ')} technologies
-`;
-};
+CRITICAL CATEGORIZATION RULES:
+- "technical" = Questions about code, architecture, APIs, databases, frameworks, algorithms, design patterns, or any technical concept that has a correct/better answer
+- "non-technical" = ONLY personal questions like "Tell me about yourself", "What's your background?", "Describe your experience"
+- Questions about "how you structure MongoDB", "API architecture", "securing endpoints" = TECHNICAL (not personal experience)
+- Questions about "your projects" asking for technical details = TECHNICAL
+- Questions asking "walk me through architecture" = TECHNICAL
 
-export const buildQueue2Prompt = (question: string, correctAnswer: string): string => `Based on this technical question:
-Question: ${question}
-Correct Answer: ${correctAnswer}
-
-Generate 2 follow-up questions:
-1. MEDIUM difficulty - dig deeper into the topic
-2. HARD difficulty - advanced/complex scenario
+For ALL TECHNICAL questions, YOU MUST provide a detailed, technically accurate answer showing best practices (written in plain language without asterisks or quotes).
+For non-technical questions, leave answer empty.
 
 Return ONLY a JSON array:
 [
-  {"question": "medium question", "difficulty": "medium", "answer": "correct answer"},
-  {"question": "hard question", "difficulty": "hard", "answer": "correct answer"}
-]`;
+  {"question": "Tell me a bit about yourself and your background in software development", "category": "non-technical", "answer": ""},
+  {"question": "How do you approach state management in React applications?", "category": "technical", "answer": "State management in React can be handled through: 1) useState/useReducer for local state, 2) Context API for shared state across components, 3) External libraries like Redux/Zustand for complex global state. Best practices include keeping state as local as possible, using Context for theme/auth, and Redux for large apps needing predictable state updates with middleware support."},
+  {"question": "Looking at your MongoDB projects, how do you structure data relationships?", "category": "technical", "answer": "MongoDB data modeling involves: 1) Embedding documents for one-to-few relationships, 2) Referencing with ObjectIds for one-to-many, 3) Using arrays for many-to-many with junction collections when needed. Key considerations: data access patterns, atomicity needs, document size limits (16MB), and query performance. Normalize when data changes frequently independently."}
+]
 
-/**
- * Generate ideal answer with source URLs for verification
- */
-export const buildIdealAnswerPrompt = (question: string): string => `For this technical question, provide a comprehensive ideal answer with supporting sources:
+CRITICAL: 
+- First question MUST be introduction/warm-up (non-technical)
+- Questions about technical concepts, architecture, tools, or code = "technical" with detailed answer
+- EVERY technical question MUST have a comprehensive answer
+- NO asterisks, quotes, or markdown formatting in questions or answers`;
+};
+
+export const buildQueue2Prompt = (question: string, correctAnswer: string): string => `You're conducting a technical interview. The candidate just answered a question, and you want to explore the TOPIC deeper with natural follow-up questions.
+
+Original Question Topic: ${question}
+Technical Context: ${correctAnswer}
+
+Generate 2 natural follow-up questions that:
+1. MEDIUM difficulty - Dig deeper into the same TOPIC (e.g., "How would you handle X edge case?" or "What about Y scenario?")
+2. HARD difficulty - Advanced real-world application (e.g., "If you had to optimize this..." or "How would this work at scale?")
+
+CRITICAL RULES:
+- DO NOT reference or assume what the candidate answered (e.g., avoid "You mentioned...", "You've touched on...", "Beyond what you said...")
+- Focus on the TOPIC itself, not their specific answer
+- Ask standalone questions about the topic area
+- Make them sound conversational and natural
+
+CRITICAL TEXT FORMATTING FOR TTS:
+- DO NOT use asterisks (*) for emphasis - they will be read aloud
+- DO NOT use single quotes (') or double quotes (") around words - they will be spoken
+- Use plain natural language without markup or special characters
+- Write as if speaking naturally in conversation
+
+GOOD Examples:
+- "What are some performance considerations when working with images in web applications?"
+- "How would you optimize image loading for mobile devices?"
+
+BAD Examples (DON'T DO THIS):
+- "Beyond what you mentioned, what else..."
+- "You've touched on X, now tell me about Y..."
+- "Building on your answer..."
+
+Return ONLY a JSON array:
+[
+  {"question": "natural medium follow-up question", "difficulty": "medium", "answer": "detailed technical answer"},
+  {"question": "natural hard follow-up question", "difficulty": "hard", "answer": "detailed technical answer"}
+]
+
+Questions should be about the TOPIC, not referencing their previous answer. No asterisks or quotes in text.`;
+
+export const buildFollowupPrompt = (question: string, wrongAnswer: string): string => `You're interviewing a candidate who seems confused about a topic. Rather than marking them wrong and moving on, you want to help them understand or give them another chance.
 
 Question: ${question}
+Their Answer: ${wrongAnswer}
 
-Generate:
-1. A detailed, technically accurate ideal answer
-2. 2-3 authoritative source URLs that verify the answer (documentation, official sites, reputable tech resources)
+Generate ONE supportive follow-up question that:
+- Sounds empathetic and encouraging (e.g., "Let me phrase it differently..." or "Think about it from X perspective...")
+- Helps clarify the concept without being condescending
+- Gives them a chance to demonstrate understanding in a different way
+- Feels like a real mentor/interviewer helping them
 
-Return ONLY a JSON object:
-{
-  "ideal_answer": "comprehensive technical answer",
-  "source_urls": [
-    "https://example.com/source1",
-    "https://example.com/source2"
-  ]
-}
-
-Ensure sources are real, authoritative URLs (e.g., MDN, official documentation, Stack Overflow, tech blogs).`;
-
-export const buildAnalysisPrompt = (question: string, idealAnswer: string, userAnswer: string): string => `Compare these answers and determine correctness percentage:
-
-Question: ${question}
-Ideal Answer: ${idealAnswer}
-User's Answer: ${userAnswer}
-
-Analyze the user's answer against the ideal answer. Consider:
-- Technical accuracy
-- Completeness of explanation
-- Correct terminology usage
-- Conceptual understanding
+CRITICAL TEXT FORMATTING FOR TTS:
+- DO NOT use asterisks (*) for emphasis - they will be read aloud
+- DO NOT use single quotes (') or double quotes (") around words - they will be spoken
+- Use plain natural language without markup
+- Write as if speaking naturally to someone
 
 Return ONLY a JSON object:
-{
-  "correctness": 85,
-  "reason": "Brief explanation of scoring",
-  "route_action": "next_difficulty"
-}
+{"question": "your supportive follow-up question"}
 
-Where:
-- correctness: 0-100 score
-- reason: Brief explanation
-- route_action: "next_difficulty" (≥80%), "normal_flow" (10-80%), or "followup" (≤10%)`;
-
-export const buildFollowupPrompt = (question: string, wrongAnswer: string): string => `The candidate gave a completely wrong answer:
-
-Question: ${question}
-Wrong Answer: ${wrongAnswer}
-
-Generate ONE strong follow-up question to clarify their understanding or correct their misconception.
-
-Return ONLY a JSON object:
-{"question": "your follow-up question"}`;
+Keep it conversational and human - not robotic or scripted. No asterisks or quotes.`;
 
 export const buildMoodFollowupPrompt = (mood: string, context: string): string => `The candidate is showing signs of ${mood} during the interview.
 
@@ -204,33 +255,28 @@ Generate ONE empathetic follow-up question that:
 Return ONLY a JSON object:
 {"question": "your mood-based follow-up question"}`;
 
-// Batched generation prompt: limit number of questions
-export const buildQueue1BatchPrompt = (
-  jobData: {
-    title: string;
-    position: string;
-    techStack: string[];
-    seniority: string;
-  },
-  resumeData: {
-    skills?: string;
-    projects?: any[];
-    workDetails?: any[];
-  },
-  count: number
-): string => `Generate ONLY ${count} tailored technical interview questions for a ${jobData.position} (${jobData.seniority} level) position.
+/**
+ * Generate a natural closing question/statement for the interview
+ */
+export const buildInterviewClosingPrompt = (
+  candidateName?: string,
+  performanceSummary?: string
+): string => `You're wrapping up a technical interview. Generate a natural, warm closing that:
+1. Thanks the candidate for their time
+2. Acknowledges their effort and participation
+3. Explains next steps briefly
+4. Sounds genuine and encouraging
 
-Required Tech Stack: ${jobData.techStack.join(', ')}
-Candidate Skills: ${resumeData.skills || 'Not specified'}
+${candidateName ? `Candidate's name: ${candidateName}` : ''}
+${performanceSummary ? `Performance context: ${performanceSummary}` : ''}
 
-For technical questions, include the correct answer.
+Generate a closing statement that feels human and encouraging. It should be 2-3 sentences.
 
-Return ONLY a JSON array:
-[
-  {"question": "technical question about required stack", "category": "technical", "answer": "correct answer"},
-  {"question": "question about candidate's experience", "category": "non-technical", "answer": ""}
-]
+Return ONLY a JSON object:
+{"closing": "Your natural closing statement"}
 
-Ensure at least 80% are technical questions focused on ${jobData.techStack.join(', ')}.`;
+Example tone: "Thanks so much for taking the time today. You've shown some great problem-solving skills, and I appreciate your thorough answers. We'll review everything and get back to you within the next few days."
+
+Keep it warm, professional, and authentic - like a real person ending an interview.`;
 
 

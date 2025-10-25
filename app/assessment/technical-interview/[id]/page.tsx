@@ -11,7 +11,12 @@ interface TechnicalInterviewPageProps {
 
 export default async function TechnicalInterviewPage({ params }: TechnicalInterviewPageProps) {
   const resolvedParams = await params;
-  const { id: interviewId } = resolvedParams;
+  let interviewId = resolvedParams.id;
+  
+  // Ensure interviewId is a string
+  if (typeof interviewId !== 'string') {
+    interviewId = String(interviewId);
+  }
   
   // Fetch interview session data and validate authorization
   const interviewSession = await fetchInterviewSession(interviewId);

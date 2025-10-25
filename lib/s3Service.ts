@@ -228,11 +228,6 @@ export const S3Service = {
       throw new Error("S3 bucket name is not configured");
     }
 
-    console.log("Uploading to S3:", {
-      bucket: S3_BUCKET_NAME,
-      key,
-      contentType,
-    });
 
     const uploadCommand = new PutObjectCommand({
       Bucket: S3_BUCKET_NAME,

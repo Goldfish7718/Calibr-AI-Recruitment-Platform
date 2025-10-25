@@ -56,6 +56,22 @@ export async function fetchInterviewSession(interviewId: string): Promise<FetchI
       };
     }
 
+    // Ensure interviewId is a valid string and not an object representation
+    let cleanInterviewId = interviewId;
+    if (typeof cleanInterviewId !== 'string') {
+      cleanInterviewId = String(cleanInterviewId);
+    }
+    
+    // Remove any URL encoding artifacts
+    cleanInterviewId = cleanInterviewId.trim();
+    if (cleanInterviewId.includes('%5B') || cleanInterviewId.includes('object')) {
+      console.error('Invalid interviewId format:', cleanInterviewId);
+      return { 
+        success: false, 
+        error: 'Invalid interview ID format' 
+      };
+    }
+
     const authenticatedCandidateId = session.user?._id;
     
     if (!authenticatedCandidateId) {
@@ -66,9 +82,9 @@ export async function fetchInterviewSession(interviewId: string): Promise<FetchI
     }
     
     console.log('✓ Validating candidate:', authenticatedCandidateId);
-    console.log('✓ For technical interview:', interviewId);
+    console.log('✓ For technical interview:', cleanInterviewId);
 
-    const interview = await TechnicalInterviewModel.findById(interviewId);
+    const interview = await TechnicalInterviewModel.findById(cleanInterviewId).lean();
     
     if (!interview) {
       return { 
@@ -78,7 +94,7 @@ export async function fetchInterviewSession(interviewId: string): Promise<FetchI
     }
 
     // Validate candidate exists
-    const candidate = await CandidateModel.findById(authenticatedCandidateId);
+    const candidate = await CandidateModel.findById(authenticatedCandidateId).lean();
     if (!candidate) {
       return {
         success: false,
@@ -100,15 +116,28 @@ export async function fetchInterviewSession(interviewId: string): Promise<FetchI
     const existingEvaluation = await TechnicalInterviewEvaluationModel.findOne({
       candidateId: authenticatedCandidateId,
       technicalInterviewId: interviewId
-    });
+    }).lean();
+
+    // TESTING MODE: Allow retaking completed interviews for development
+    const TESTING_MODE = process.env.NEXT_PUBLIC_INTERVIEW_TESTING_MODE === 'true';
 
     if (existingEvaluation) {
-      // Block if interview is completed
+      // Block if interview is completed (unless in testing mode)
       if (existingEvaluation.status === 'completed') {
-        return {
-          success: false,
-          error: 'already_attempted'
-        };
+        if (!TESTING_MODE) {
+          return {
+            success: false,
+            error: 'already_attempted'
+          };
+        } else {
+          console.log('[Testing Mode] Allowing access to completed interview for testing');
+          // In testing mode, reset the evaluation to allow retaking
+          await TechnicalInterviewEvaluationModel.findByIdAndUpdate(existingEvaluation._id, {
+            status: 'in_progress',
+            endedAt: null,
+            startedAt: new Date()
+          });
+        }
       }
       
       if (existingEvaluation.status === 'in_progress') {
@@ -117,8 +146,8 @@ export async function fetchInterviewSession(interviewId: string): Promise<FetchI
         const totalDurationMs = interview.duration * 60 * 1000;
         const timeLeft = Math.max(0, totalDurationMs - elapsed);
         
-        // If time expired, mark as completed and block access
-        if (timeLeft <= 0) {
+        // If time expired, mark as completed and block access (unless in testing mode)
+        if (timeLeft <= 0 && !TESTING_MODE) {
           await TechnicalInterviewEvaluationModel.findByIdAndUpdate(existingEvaluation._id, {
             status: 'completed',
             endedAt: new Date()
@@ -131,6 +160,7 @@ export async function fetchInterviewSession(interviewId: string): Promise<FetchI
         }
         
         // Time is still valid, allow continuation
+        // OR testing mode is enabled, so ignore time expiration
       }
     }
 
@@ -139,10 +169,11 @@ export async function fetchInterviewSession(interviewId: string): Promise<FetchI
     let resumeData = null;
 
     if (interview.assessmentId) {
-      const assessment = await AssessmentModel.findById(interview.assessmentId).populate('jobOpportunity');
+      // Don't use populate to avoid circular references
+      const assessment = await AssessmentModel.findById(interview.assessmentId).lean();
       
       if (assessment && assessment.jobOpportunity) {
-        const job = await JobOpportunityModel.findById(assessment.jobOpportunity);
+        const job = await JobOpportunityModel.findById(assessment.jobOpportunity).lean();
         if (job) {
           jobData = {
             title: job.title,
@@ -161,10 +192,10 @@ export async function fetchInterviewSession(interviewId: string): Promise<FetchI
     // Fetch resume data from application
     const application = await ApplicationModel.findOne({
       candidateId: authenticatedCandidateId
-    }).sort({ applicationDate: -1 });
+    }).sort({ applicationDate: -1 }).lean();
 
     if (application && application.resumeId) {
-      const resume = await ResumeModel.findById(application.resumeId);
+      const resume = await ResumeModel.findById(application.resumeId).lean();
       if (resume && resume.parsedData) {
         resumeData = resume.parsedData;
       }
@@ -172,20 +203,20 @@ export async function fetchInterviewSession(interviewId: string): Promise<FetchI
 
     const interviewData = {
       _id: String(interview._id),
-      duration: interview.duration,
+      duration: Number(interview.duration),
       mode: interview.mode,
       language: interview.language,
       difficulty: interview.difficulty,
-      topics: interview.topics,
-      consentRequired: interview.consentRequired,
+      topics: Array.isArray(interview.topics) ? interview.topics : [],
+      consentRequired: Boolean(interview.consentRequired),
       proctoring: {
-        cameraRequired: interview.proctoring.cameraRequired,
-        micRequired: interview.proctoring.micRequired,
-        screenShareRequired: interview.proctoring.screenShareRequired
+        cameraRequired: Boolean(interview.proctoring?.cameraRequired),
+        micRequired: Boolean(interview.proctoring?.micRequired),
+        screenShareRequired: Boolean(interview.proctoring?.screenShareRequired)
       },
       status: interview.status,
-      jobData,
-      resumeData
+      jobData: jobData ? { ...jobData } : null,
+      resumeData: resumeData ? { ...resumeData } : null
     };
 
     return {
