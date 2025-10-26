@@ -5,6 +5,8 @@ export interface Question {
   difficulty?: "medium" | "hard";
   answer?: string;
   parentQuestion?: string;
+  topicId?: string;
+  source_urls?: string[];
 }
 
 export interface ConversationItem {
@@ -43,4 +45,47 @@ export interface InterviewConfig {
   status: "inactive" | "active" | "completed";
 }
 
+// Context types for question generation
+export interface JobData {
+  title: string;
+  department: string;
+  position: string;
+  seniority: string;
+  techStack: string[];
+  description?: string;
+  requirements?: string;
+}
+
+export interface ResumeData {
+  tagline?: string;
+  summary?: string;
+  workDetails?: any[];
+  education?: any[];
+  skills?: string;
+  projects?: any[];
+  certificates?: any[];
+}
+
+// Session data types
+export interface FetchInterviewSessionResponse {
+  success: boolean;
+  data?: {
+    _id: string;
+    duration: number;
+    mode: 'live' | 'async';
+    language: string;
+    difficulty: 'junior' | 'mid' | 'senior';
+    topics: string[];
+    consentRequired: boolean;
+    proctoring: {
+      cameraRequired: boolean;
+      micRequired: boolean;
+      screenShareRequired: boolean;
+    };
+    status: string;
+    jobData?: JobData;
+    resumeData?: ResumeData;
+  };
+  error?: string;
+}
 

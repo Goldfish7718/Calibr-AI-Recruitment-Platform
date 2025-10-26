@@ -1,7 +1,7 @@
 import React, { Suspense } from 'react';
 import RoleWrapper from '@/lib/RoleWrapper';
 import AlreadyAttempted from '@/components/AlreadyAttempted';
-import { fetchInterviewSession } from '../session-actions';
+import { fetchInterviewSession } from '../actions';
 import TechnicalInterviewClient from './TechnicalInterviewClient';
 
 interface TechnicalInterviewPageProps {

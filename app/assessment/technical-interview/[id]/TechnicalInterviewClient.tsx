@@ -14,30 +14,23 @@ import VideoProcessing from "@/lib/video-processing";
 import HeaderBanner from "./_components/HeaderBanner";
 import SetupScreen from "./_components/SetupScreen";
 import type { InterviewConfig, Question } from "../types";
-import { formatTime } from "@/utils/interview";
+import { formatTime, playInterviewAudio } from "@/utils/interview";
 
 // TESTING MODE: Set to true to disable timer-based interview completion
 // When true, interview only ends when all questions are answered, not when time runs out
 const TESTING_MODE = process.env.NEXT_PUBLIC_INTERVIEW_TESTING_MODE === "true";
-import { startAudioRecording } from "@/utils/media";
+import { 
+  startAudioRecording, 
+  pauseSpeechRecognition, 
+  resumeSpeechRecognition
+} from "@/utils/media";
 import { initWebSpeechRecognition, type ISpeechRecognition } from "@/utils/stt";
 import {
   generateTTSAudio,
   playBrowserTTS,
   loadBrowserVoices,
 } from "@/utils/tts";
-import {
-  getAskedQuestions,
-  storeQ1Questions,
-  getQ1QuestionsForChunk,
-  addAskedQuestion,
-  updateAskedQuestionAnswer,
-  generateQuestions,
-  preprocessQuestion,
-  deleteInterviewAudio,
-  markQuestionAsked,
-  completeInterview,
-} from "../actions";
+import { useInterviewActions } from "../hooks";
 import { buildInterviewClosingPrompt } from "@/ai-engine/prompts/technicalInterview";
 import { callGeminiAPI } from "@/utils/interview";
 
@@ -87,6 +80,21 @@ export default function TechnicalInterviewClient({
     questionsAsked: 0,
   });
   const [closingMessage, setClosingMessage] = useState<string>("");
+
+  // Initialize interview actions hooks
+  const {
+    getAskedQuestions,
+    storeQ1Questions,
+    getQ1QuestionsForChunk,
+    addAskedQuestion,
+    updateAskedQuestionAnswer,
+    generateQuestions,
+    preprocessQuestion,
+    deleteInterviewAudio,
+    markQuestionAsked,
+    completeInterview,
+    storeVideoLogs,
+  } = useInterviewActions();
 
   // New chunking state
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -151,8 +159,6 @@ export default function TechnicalInterviewClient({
     if (currentScreen !== "interview") return; // Only store during active interview
 
     const handleVideoLog = async (log: any) => {
-      const { storeVideoLogs } = await import("../actions");
-
       console.log("[Video] Storing log immediately:", log);
       const result = await storeVideoLogs(interviewId, [log]);
       if (!result.success) {
@@ -180,7 +186,7 @@ export default function TechnicalInterviewClient({
       };
       cleanup();
     };
-  }, [currentScreen, interviewId]);
+  }, [currentScreen, interviewId, storeVideoLogs]);
 
   /**
    * Generate TTS audio and upload to S3 (with retry)
@@ -351,60 +357,33 @@ export default function TechnicalInterviewClient({
               answer
             );
 
-            if (q2Result.success) {
+            if (q2Result.success && q2Result.questions) {
               console.log(`[Preprocessing] ✓ Q2 generation successful`);
 
-              // Add medium question if generated
-              if (q2Result.mediumQuestion) {
-                const mediumAudioUrl = await generateAndUploadTTS(
-                  q2Result.mediumQuestion.question,
-                  q2Result.mediumQuestion.id
+              // Process each Q2 question (medium and hard)
+              for (const q2Question of q2Result.questions) {
+                const audioUrl = await generateAndUploadTTS(
+                  q2Question.question,
+                  q2Question.id
                 );
 
                 await addAskedQuestion(interviewId, {
-                  id: q2Result.mediumQuestion.id,
-                  question: q2Result.mediumQuestion.question,
+                  id: q2Question.id,
+                  question: q2Question.question,
                   category: "technical",
-                  difficulty: "medium",
+                  difficulty: q2Question.difficulty,
                   queueType: "Q2",
                   parentQuestionId: q.id,
                   askedAt: undefined as any,
                   preprocessed: true,
-                  answer: q2Result.mediumQuestion.answer,
-                  source_urls: q2Result.mediumQuestion.source_urls,
-                  audioUrl: mediumAudioUrl || undefined,
+                  answer: q2Question.answer,
+                  source_urls: q2Question.source_urls || [],
+                  audioUrl: audioUrl || undefined,
                   userAnswer: undefined,
                   correctness: undefined,
                 });
                 console.log(
-                  `[Preprocessing] ✓ Medium Q2 stored: ${q2Result.mediumQuestion.id}`
-                );
-              }
-
-              // Add hard question if generated
-              if (q2Result.hardQuestion) {
-                const hardAudioUrl = await generateAndUploadTTS(
-                  q2Result.hardQuestion.question,
-                  q2Result.hardQuestion.id
-                );
-
-                await addAskedQuestion(interviewId, {
-                  id: q2Result.hardQuestion.id,
-                  question: q2Result.hardQuestion.question,
-                  category: "technical",
-                  difficulty: "hard",
-                  queueType: "Q2",
-                  parentQuestionId: q.id,
-                  askedAt: undefined as any,
-                  preprocessed: true,
-                  answer: q2Result.hardQuestion.answer,
-                  source_urls: q2Result.hardQuestion.source_urls,
-                  audioUrl: hardAudioUrl || undefined,
-                  userAnswer: undefined,
-                  correctness: undefined,
-                });
-                console.log(
-                  `[Preprocessing] ✓ Hard Q2 stored: ${q2Result.hardQuestion.id}`
+                  `[Preprocessing] ✓ ${q2Question.difficulty} Q2 stored: ${q2Question.id}`
                 );
               }
             } else {
@@ -502,44 +481,21 @@ export default function TechnicalInterviewClient({
 
   /**
    * Pause recording (stop STT but keep mic stream active)
+   * Wrapper for utility function with state update
    */
   const pauseRecording = () => {
-    if (speechRecognitionRef.current) {
-      try {
-        speechRecognitionRef.current.stop();
-        setIsRecording(false); // Turn off mic indicator when STT stops
-        console.log("[STT] 🔇 Paused speech recognition");
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      } catch (error) {
-        // Ignore if already stopped
-      }
-    }
+    pauseSpeechRecognition(speechRecognitionRef.current);
+    setIsRecording(false);
   };
 
   /**
    * Resume recording (restart STT) - only if not user-muted
+   * Wrapper for utility function with state update
    */
   const resumeRecording = () => {
-    if (!speechRecognitionRef.current) {
-      console.error("[STT] ❌ Cannot resume - not initialized");
-      return;
-    }
-
-    // Don't resume if user manually muted the mic (use REF for immediate access)
-    if (isUserMutedRef.current) {
-      console.log("[STT] 🔇 Not resuming - user has muted mic");
-      return;
-    }
-
-    try {
-      speechRecognitionRef.current.start();
-      setIsRecording(true); // Turn on mic indicator when STT starts
-      console.log("[STT] 🎤 Resumed speech recognition");
-    } catch (error: any) {
-      // Silently ignore "already started" errors
-      if (error.message && !error.message.includes("already started")) {
-        console.error("[STT] Error resuming:", error);
-      }
+    resumeSpeechRecognition(speechRecognitionRef.current, isUserMutedRef.current);
+    if (!isUserMutedRef.current) {
+      setIsRecording(true);
     }
   };
 
@@ -551,7 +507,7 @@ export default function TechnicalInterviewClient({
     audioUrl?: string,
     questionText?: string
   ) => {
-    const text = questionText || currentQuestionRef.current?.question;
+    const text = questionText || currentQuestionRef.current?.question || "";
 
     // Pause recording during AI speech
     pauseRecording();
@@ -565,39 +521,24 @@ export default function TechnicalInterviewClient({
       console.warn("[Audio] markQuestionAsked failed:", err);
     }
 
-    // No waiting needed - play question immediately
-
-    const onAudioEnd = () => {
-      // Resume recording immediately after AI finishes speaking
-      setTimeout(() => resumeRecording(), 300); // Reduced from 500ms to 300ms
+    const onAudioStart = () => {
+      setIsSpeaking(true);
     };
 
-    // Try S3 audio first
-    if (audioUrl) {
-      try {
-        setIsSpeaking(true);
-        const audio = new Audio(audioUrl);
+    const onAudioEnd = () => {
+      setIsSpeaking(false);
+      // Resume recording immediately after AI finishes speaking
+      setTimeout(() => resumeRecording(), 300);
+    };
 
-        audio.onerror = () => {
-          console.warn("[Audio] S3 audio failed, falling back to browser TTS");
-          playBrowserAudio(text || "", undefined, onAudioEnd);
-        };
-
-        audio.onended = () => {
-          setIsSpeaking(false);
-          onAudioEnd();
-        };
-
-        await audio.play();
-        return;
-      } catch (error) {
-        console.error("[Audio] Error with S3 audio:", error);
-      }
-    }
-
-    // Fallback: Browser TTS
-    console.log("[Audio] No S3 audio available, using browser TTS");
-    playBrowserAudio(text || "", undefined, onAudioEnd);
+    // Use utility function for playback with fallback
+    await playInterviewAudio(
+      audioUrl,
+      text,
+      onAudioStart,
+      onAudioEnd,
+      (text, onEnd) => playBrowserAudio(text, undefined, onEnd)
+    );
   };
 
   const startRecording = async () => {

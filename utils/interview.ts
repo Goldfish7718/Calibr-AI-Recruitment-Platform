@@ -15,6 +15,7 @@ export interface Question {
   answer?: string;
   parentQuestion?: string;
   topicId?: string;
+  source_urls?: string[];
 }
 
 export interface Queues {
@@ -268,4 +269,77 @@ export function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+}
+
+/**
+ * Audio Playback Utilities for Interview
+ */
+
+/**
+ * Play audio from URL with automatic fallback to browser TTS
+ */
+export async function playInterviewAudio(
+  audioUrl: string | undefined,
+  questionText: string,
+  onStart: () => void,
+  onEnd: () => void,
+  playBrowserTTSFallback: (text: string, onEnd: () => void) => void
+): Promise<void> {
+  onStart();
+
+  // Try S3 audio first
+  if (audioUrl) {
+    try {
+      const audio = new Audio(audioUrl);
+
+      audio.onerror = () => {
+        console.warn("[Audio] S3 audio failed, falling back to browser TTS");
+        playBrowserTTSFallback(questionText, onEnd);
+      };
+
+      audio.onended = onEnd;
+
+      await audio.play();
+      return;
+    } catch (error) {
+      console.error("[Audio] Error with S3 audio:", error);
+    }
+  }
+
+  // Fallback: Browser TTS
+  console.log("[Audio] No S3 audio available, using browser TTS");
+  playBrowserTTSFallback(questionText, onEnd);
+}
+
+/**
+ * Chunk Management Utilities
+ */
+
+/**
+ * Calculate chunk number from question index
+ */
+export function getChunkNumber(questionIndex: number, chunkSize: number = 5): number {
+  return Math.floor(questionIndex / chunkSize);
+}
+
+/**
+ * Check if next chunk should be preprocessed
+ */
+export function shouldPreprocessNextChunk(
+  currentQuestionIndex: number,
+  totalQuestions: number,
+  preprocessedChunks: Set<number>,
+  chunkSize: number = 5,
+  lookahead: number = 2
+): { shouldPreprocess: boolean; chunkNumber: number } {
+  const currentChunk = getChunkNumber(currentQuestionIndex, chunkSize);
+  const nextChunk = currentChunk + 1;
+  const questionsUntilNextChunk = (nextChunk * chunkSize) - currentQuestionIndex;
+
+  const shouldPreprocess =
+    !preprocessedChunks.has(nextChunk) &&
+    questionsUntilNextChunk <= lookahead &&
+    (nextChunk * chunkSize) < totalQuestions;
+
+  return { shouldPreprocess, chunkNumber: nextChunk };
 }
