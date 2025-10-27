@@ -170,9 +170,9 @@ export function useInterviewActions() {
     interviewId: string,
     questionId: string,
     userAnswer: string,
-    correctness?: number
+    evaluation?: { correctness: number; reason: string; route_action: 'next_difficulty' | 'normal_flow' | 'followup' }
   ) => {
-    return await updateAskedQuestionAnswerAction(interviewId, questionId, userAnswer, correctness);
+    return await updateAskedQuestionAnswerAction(interviewId, questionId, userAnswer, evaluation);
   };
 
   const removeAskedQuestion = async (

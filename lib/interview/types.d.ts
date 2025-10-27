@@ -90,7 +90,8 @@ export interface EngineAdapter {
     correctAnswer: string,
     userAnswer: string,
     queues: Queues,
-    currentQuestion: Question
+    currentQuestion: Question,
+    interviewId: string
   ) => Promise<{ updatedQueues?: Queues; correctness?: number }>;
   persistQA: (
     interviewId: string,

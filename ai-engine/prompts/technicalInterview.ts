@@ -57,22 +57,22 @@ IMPORTANT: Check if the evaluation criteria starts with "EVALUATE_DIRECTLY:":
 - If NO: This is a knowledge-based question. Compare user's answer against the ideal answer for technical accuracy.
 
 For KNOWLEDGE-BASED questions, consider:
-- Core concept mentioned? → 50%+
-- Correct approach/methodology? → 60%+
-- Multiple relevant points? → 70%+
-- Best practices mentioned? → 80%+
-- Comprehensive with examples? → 90%+
+- Core concept mentioned? → 20%+ (fails if below 20%)
+- Correct approach/methodology? → 30-40%
+- Multiple relevant points? → 50%+ (normal flow triggers)
+- Best practices mentioned? → 60-70%
+- Comprehensive with examples? → 80%+ (next difficulty triggers)
 
 For EXPERIENCE-BASED questions, consider:
-- Shows practical experience? → 60%+
-- Mentions specific tools/technologies? → 70%+
-- Discusses real challenges/solutions? → 80%+
-- Demonstrates deep understanding? → 90%+
+- Shows practical experience? → 20%+ (fails if below 20%)
+- Mentions specific tools/technologies? → 30-40%
+- Discusses real challenges/solutions? → 50%+ (normal flow triggers)
+- Demonstrates deep understanding? → 80%+ (next difficulty triggers)
 
 SCORING EXAMPLES:
-- "I use JWT for auth" → 50-60% (shows understanding, needs more detail)
-- "I use JWT tokens to secure APIs, store them in httpOnly cookies" → 70-80% (good practical approach)
-- "JWT for stateless auth, refresh tokens for security, httpOnly cookies to prevent XSS" → 85-95% (comprehensive)
+- "I use JWT for auth" → 25-35% (basic understanding, very generic answer)
+- "I use JWT tokens to secure APIs, store them in httpOnly cookies" → 50-60% (good practical approach, moves to normal flow)
+- "JWT for stateless auth, refresh tokens for security, httpOnly cookies to prevent XSS, token rotation" → 70-85% (comprehensive, next difficulty triggers)
 
 Return ONLY a JSON object:
 {
@@ -84,7 +84,7 @@ Return ONLY a JSON object:
 Where:
 - correctness: 0-100 score (be GENEROUS - real humans make mistakes under pressure)
 - reason: Brief explanation (1-2 sentences)
-- route_action: "next_difficulty" (≥50% - LOWERED from 80%), "normal_flow" (10-50%), or "followup" (≤10%)`;
+- route_action: "next_difficulty" (≥50%), "normal_flow" (20-50%), or "followup" (<20% - generates Q3 followup + deletes Q2s)`;
 
 export const buildQueue1Prompt = (
   jobData: {
@@ -169,15 +169,24 @@ CRITICAL CATEGORIZATION RULES:
 For ALL TECHNICAL questions, YOU MUST provide a detailed, technically accurate answer showing best practices (written in plain language without asterisks or quotes).
 For non-technical questions, leave answer empty.
 
+INTRO QUESTION OPTIONS (pick ONE at random, not always the same):
+- "Tell me a bit about yourself and your background in software development"
+- "Walk me through your journey as a developer"
+- "How did you get into software development and what's your experience been like?"
+- "Can you tell me about your professional background and what you've been working on?"
+- "What's your background and what areas of development interest you most?"
+- "How would you describe your experience as a developer?"
+
 Return ONLY a JSON array:
 [
-  {"question": "Tell me a bit about yourself and your background in software development", "category": "non-technical", "answer": ""},
+  {"question": "[CHOOSE ONE INTRO QUESTION FROM OPTIONS ABOVE - VARY IT]", "category": "non-technical", "answer": ""},
   {"question": "How do you approach state management in React applications?", "category": "technical", "answer": "State management in React can be handled through: 1) useState/useReducer for local state, 2) Context API for shared state across components, 3) External libraries like Redux/Zustand for complex global state. Best practices include keeping state as local as possible, using Context for theme/auth, and Redux for large apps needing predictable state updates with middleware support."},
   {"question": "Looking at your MongoDB projects, how do you structure data relationships?", "category": "technical", "answer": "MongoDB data modeling involves: 1) Embedding documents for one-to-few relationships, 2) Referencing with ObjectIds for one-to-many, 3) Using arrays for many-to-many with junction collections when needed. Key considerations: data access patterns, atomicity needs, document size limits (16MB), and query performance. Normalize when data changes frequently independently."}
 ]
 
 CRITICAL: 
-- First question MUST be introduction/warm-up (non-technical)
+- First question MUST be introduction/warm-up (non-technical) but VARY the wording each time
+- Pick a DIFFERENT intro question each time - don't use the same one repeatedly
 - Questions about technical concepts, architecture, tools, or code = "technical" with detailed answer
 - EVERY technical question MUST have a comprehensive answer
 - NO asterisks, quotes, or markdown formatting in questions or answers`;

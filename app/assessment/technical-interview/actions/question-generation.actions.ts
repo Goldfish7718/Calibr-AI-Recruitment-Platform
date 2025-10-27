@@ -70,7 +70,7 @@ export async function generateQ2Questions(
   topicId: string
 ): Promise<{ success: boolean; questions?: Question[]; error?: string }> {
   try {
-    console.log(`[Server] Generating Q2 questions for topic: ${topicId}`);
+    console.log(`[Server] Generating Q2 questions for topic (Q1 ID): ${topicId}`);
     
     const q2Prompt = buildQueue2Prompt(q1Question, q1Answer);
     const q2Result = await callGeminiAPI(q2Prompt);
@@ -105,8 +105,7 @@ export async function generateQ2Questions(
     const mediumQ = q2Questions.find((q: any) => q.difficulty === 'medium');
     if (mediumQ) {
       mediumQ.id = mediumQ.id || generateId();
-      mediumQ.topicId = topicId;
-      mediumQ.parentQuestion = q1Question;
+      mediumQ.parentQuestionId = topicId; // Store Q1's ID, not the question text
       mediumQ.category = 'technical';
     }
     
@@ -114,13 +113,12 @@ export async function generateQ2Questions(
     const hardQ = q2Questions.find((q: any) => q.difficulty === 'hard');
     if (hardQ) {
       hardQ.id = hardQ.id || generateId();
-      hardQ.topicId = topicId;
-      hardQ.parentQuestion = q1Question;
+      hardQ.parentQuestionId = topicId; // Store Q1's ID, not the question text
       hardQ.category = 'technical';
     }
     
     const finalQuestions = [mediumQ, hardQ].filter((q): q is Question => q !== undefined);
-    console.log(`[Server] ✓ Processed ${finalQuestions.length} Q2 questions with IDs and topic links`);
+    console.log(`[Server] ✓ Processed ${finalQuestions.length} Q2 questions with parentQuestionId links`);
     
     return { success: true, questions: finalQuestions };
   } catch (error) {

@@ -220,8 +220,85 @@ export async function updateAskedQuestionAnswer(
   interviewId: string,
   questionId: string,
   userAnswer: string,
-  correctness?: number
+  evaluation?: {
+    correctness: number;
+    reason: string;
+    route_action: 'next_difficulty' | 'normal_flow' | 'followup';
+  }
 ): Promise<{ success: boolean; error?: string; shouldDeleteFollowups?: boolean }> {
+  try {
+    await connectToDatabase();
+
+    const evalModel = await TechnicalInterviewEvaluationModel.findOne({
+      technicalInterviewId: interviewId,
+      status: 'in_progress'
+    });
+
+    if (!evalModel) {
+      return { success: false, error: 'Evaluation not found' };
+    }
+
+    const currentQuestion = evalModel.askedQuestions.find((q: any) => q.id === questionId);
+    if (!currentQuestion) {
+      return { success: false, error: 'Question not found in askedQuestions' };
+    }
+
+    currentQuestion.userAnswer = userAnswer;
+    
+    // Store the entire evaluation object, not just correctness
+    if (evaluation) {
+      currentQuestion.evaluation = {
+        correctness: evaluation.correctness,
+        reason: evaluation.reason,
+        route_action: evaluation.route_action,
+      };
+    }
+
+    let shouldDeleteFollowups = false;
+    const correctness = evaluation?.correctness ?? 0;
+    
+    // Delete Q2 follow-ups if low score on Q1/Q2
+    if (currentQuestion.queueType === 'Q1' && correctness < 50) {
+      const mediumId = `${questionId}_medium`;
+      const hardId = `${questionId}_hard`;
+      
+      evalModel.askedQuestions = evalModel.askedQuestions.filter((q: any) => 
+        q.id !== mediumId && q.id !== hardId
+      );
+      shouldDeleteFollowups = true;
+    } else if (currentQuestion.queueType === 'Q2' && currentQuestion.difficulty === 'medium' && correctness < 50) {
+      const hardId = `${currentQuestion.parentQuestionId}_hard`;
+      evalModel.askedQuestions = evalModel.askedQuestions.filter((q: any) => q.id !== hardId);
+    }
+
+    await evalModel.save();
+    return { success: true, shouldDeleteFollowups };
+  } catch (error: any) {
+    console.error('Error updating answer:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Update specific fields of an asked question (for preprocessing or evaluation)
+ */
+export async function updateAskedQuestion(
+  interviewId: string,
+  questionId: string,
+  updates: {
+    answer?: string;
+    source_urls?: string[];
+    audioUrl?: string;
+    preprocessed?: boolean;
+    askedAt?: Date;
+    userAnswer?: string;
+    evaluation?: {
+      correctness: number;
+      reason: string;
+      route_action: 'next_difficulty' | 'normal_flow' | 'followup';
+    };
+  }
+): Promise<{ success: boolean; error?: string }> {
   try {
     await connectToDatabase();
 
@@ -234,34 +311,30 @@ export async function updateAskedQuestionAnswer(
       return { success: false, error: 'Evaluation not found' };
     }
 
-    const currentQuestion = evaluation.askedQuestions.find((q: any) => q.id === questionId);
-    if (!currentQuestion) {
+    const question = evaluation.askedQuestions.find((q: any) => q.id === questionId);
+    if (!question) {
       return { success: false, error: 'Question not found in askedQuestions' };
     }
 
-    currentQuestion.userAnswer = userAnswer;
-    currentQuestion.correctness = correctness;
-
-    let shouldDeleteFollowups = false;
-    
-    // Delete Q2 follow-ups if low score on Q1/Q2
-    if (currentQuestion.queueType === 'Q1' && correctness !== undefined && correctness < 50) {
-      const mediumId = `${questionId}_medium`;
-      const hardId = `${questionId}_hard`;
-      
-      evaluation.askedQuestions = evaluation.askedQuestions.filter((q: any) => 
-        q.id !== mediumId && q.id !== hardId
-      );
-      shouldDeleteFollowups = true;
-    } else if (currentQuestion.queueType === 'Q2' && currentQuestion.difficulty === 'medium' && correctness !== undefined && correctness < 50) {
-      const hardId = `${currentQuestion.parentQuestionId}_hard`;
-      evaluation.askedQuestions = evaluation.askedQuestions.filter((q: any) => q.id !== hardId);
+    // Update only provided fields
+    if (updates.answer !== undefined) question.answer = updates.answer;
+    if (updates.source_urls !== undefined) question.source_urls = updates.source_urls;
+    if (updates.audioUrl !== undefined) question.audioUrl = updates.audioUrl;
+    if (updates.preprocessed !== undefined) question.preprocessed = updates.preprocessed;
+    if (updates.askedAt !== undefined) question.askedAt = updates.askedAt;
+    if (updates.userAnswer !== undefined) question.userAnswer = updates.userAnswer;
+    if (updates.evaluation !== undefined) {
+      question.evaluation = {
+        correctness: updates.evaluation.correctness,
+        reason: updates.evaluation.reason,
+        route_action: updates.evaluation.route_action,
+      };
     }
 
     await evaluation.save();
-    return { success: true, shouldDeleteFollowups };
+    return { success: true };
   } catch (error: any) {
-    console.error('Error updating answer:', error);
+    console.error('[updateAskedQuestion] Error:', error);
     return { success: false, error: error.message };
   }
 }
@@ -287,7 +360,7 @@ export async function removeAskedQuestion(
 
     return { success: true };
   } catch (error: any) {
-    console.error('Error removing asked question:', error);
+    console.error('[removeAskedQuestion] Error removing asked question:', error);
     return { success: false, error: error.message };
   }
 }

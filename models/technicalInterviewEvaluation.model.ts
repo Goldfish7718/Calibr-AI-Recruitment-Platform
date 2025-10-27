@@ -58,7 +58,13 @@ export interface TechnicalInterviewEvaluation extends Document {
     
     // User response data (filled after candidate answers)
     userAnswer?: string;  // Candidate's answer
-    correctness?: number;  // 0-100 (only for technical questions)
+    
+    // Evaluation data (filled after AI analysis) - comprehensive evaluation result
+    evaluation?: {
+      correctness: number;  // 0-100 score
+      reason: string;  // Explanation of scoring
+      route_action: 'next_difficulty' | 'normal_flow' | 'followup';  // Next action (next_difficulty ≥50%, normal_flow 20-50%, followup <20%)
+    };
   }[];
 
   // AI outputs
@@ -145,7 +151,13 @@ const TechnicalInterviewEvaluationSchema: Schema = new Schema({
       
       // User response data
       userAnswer: { type: String },
-      correctness: { type: Number, min: 0, max: 100 },
+      
+      // Evaluation data (comprehensive evaluation result)
+      evaluation: {
+        correctness: { type: Number, min: 0, max: 100 },
+        reason: { type: String },
+        route_action: { type: String, enum: ['next_difficulty', 'normal_flow', 'followup'] },
+      },
     }],
     default: [],
     required: true

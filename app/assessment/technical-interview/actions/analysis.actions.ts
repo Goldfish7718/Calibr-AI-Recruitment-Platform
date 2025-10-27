@@ -1,11 +1,12 @@
 "use server";
 
-import { buildFollowupPrompt, buildQueue2Prompt } from "@/ai-engine/prompts/technicalInterview";
-import { Question, Queues, generateId, callGeminiAPI, evaluateAnswer, EvaluationResult } from "@/utils/interview";
+import { buildFollowupPrompt } from "@/ai-engine/prompts/technicalInterview";
+import { Question, Queues, evaluateAnswer, EvaluationResult } from "@/utils/interview";
+import { analyzeAnswerFlow } from "@/lib/interview/answerAnalysis";
 
 /**
  * Answer Analysis Actions
- * Handles answer evaluation and queue routing logic
+ * Handles answer evaluation and queue routing logic for technical interviews
  */
 
 export async function analyzeAnswer(
@@ -13,14 +14,15 @@ export async function analyzeAnswer(
   correctAnswer: string,
   userAnswer: string,
   currentQueues: Queues,
-  currentQuestion: Question
+  currentQuestion: Question,
+  interviewId?: string
 ): Promise<{ updatedQueues?: Queues; correctness?: number; evaluation?: EvaluationResult }> {
   try {
+    console.log(`[analyzeAnswer] Called with interviewId: ${interviewId || 'MISSING'}, questionId: ${currentQuestion.id}`);
+    
     // Edge case: If either idealAnswer or userAnswer is missing, skip evaluation and Q2/Q3 generation
     if (!correctAnswer || correctAnswer.trim().length === 0 || !userAnswer || userAnswer.trim().length === 0) {
       console.warn('[analyzeAnswer] Missing idealAnswer or userAnswer, skipping evaluation and Q2/Q3 generation');
-      // Return undefined correctness to avoid triggering any queue logic (Q2 or Q3)
-      // This ensures we simply move to next question without any queue modifications
       return {};
     }
 
@@ -33,110 +35,109 @@ export async function analyzeAnswer(
     // If evaluation returns null (due to missing data), skip Q2/Q3 generation
     if (!evaluation) {
       console.warn('[analyzeAnswer] Evaluation failed, skipping Q2/Q3 generation');
-      // Return undefined correctness to avoid triggering any queue logic (Q2 or Q3)
       return {};
     }
 
     const correctness = evaluation.score;
-    const updatedQueues = { ...currentQueues };
 
-    // Apply flow rules based on correctness and route_action
-    if (evaluation.route_action === 'followup' || correctness <= 10) {
-      // Generate follow-up for very wrong answer
-      const followupPrompt = buildFollowupPrompt(question, userAnswer);
+    // Only process Q2/Q3 logic if we have interviewId (to access database)
+    if (!interviewId) {
+      console.warn('[analyzeAnswer] No interviewId provided, skipping Q2/Q3 logic');
+      return { correctness, evaluation };
+    }
 
-      const followupResult = await callGeminiAPI(followupPrompt);
+    // Load all asked questions from database to determine Q2s in serial order
+    const { getAskedQuestions, removeAskedQuestion, addAskedQuestion } = await import('./storage.actions');
+    const questionsResult = await getAskedQuestions(interviewId);
+    
+    if (!questionsResult.success || !questionsResult.questions) {
+      console.error('[analyzeAnswer] Failed to load asked questions from database');
+      return { correctness, evaluation };
+    }
+
+    const allAskedQuestions = questionsResult.questions;
+
+    // Use shared analysis logic
+    const analysisResult = await analyzeAnswerFlow(
+      correctness,
+      currentQuestion.id,
+      question,
+      userAnswer,
+      allAskedQuestions,
+      buildFollowupPrompt
+    );
+
+    // Delete Q2 questions from database if needed
+    if (analysisResult.shouldDeleteQ2 && analysisResult.q2IdsToDelete.length > 0) {
+      console.log(`[analyzeAnswer] Deleting ${analysisResult.q2IdsToDelete.length} Q2 questions from database`);
       
-      if (followupResult) {
-        try {
-          const jsonMatch = followupResult.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            const followup = JSON.parse(jsonMatch[0]);
-            updatedQueues.queue3.push({
-              question: followup.question,
-              category: 'followup',
-              parentQuestion: currentQuestion.id, // Store question ID, not full text
-              topicId: currentQuestion.topicId,
-              id: generateId()
-            });
-
-            // Discard all depth questions for this topic (Queue 2)
-            if (currentQuestion.topicId) {
-              updatedQueues.queue2 = updatedQueues.queue2.filter(
-                q => q.topicId !== currentQuestion.topicId
-              );
-            }
-          }
-        } catch (e) {
-          console.error('Parse error:', e);
-        }
-      }
-    } else if (evaluation.route_action === 'next_difficulty' || correctness >= 50) {
-      // Progress to next difficulty level (LOWERED from 80% to 50%)
-      // This allows Q2 follow-ups for decent answers, not just excellent ones
-      console.log(`[analyzeAnswer] Score ${correctness}% ≥ 50%, generating Q2 follow-ups`);
-      const topicId = currentQuestion.topicId || currentQuestion.id;
-      
-      if (currentQuestion.category === 'technical') {
-        // Generate Q2 medium/hard questions for this topic
-        console.log(`[analyzeAnswer] Generating Q2 questions for topic: ${topicId}`);
+      for (const q2Id of analysisResult.q2IdsToDelete) {
+        console.log(`[analyzeAnswer] 🗑️ Deleting Q2 question ${q2Id}`);
+        const deleteResult = await removeAskedQuestion(interviewId, q2Id);
         
-        try {
-          const q2Prompt = buildQueue2Prompt(question, correctAnswer);
-          const q2Result = await callGeminiAPI(q2Prompt);
-          
-          if (q2Result) {
-            const jsonMatch = q2Result.match(/\[[\s\S]*\]/);
-            if (jsonMatch) {
-              const q2Questions = JSON.parse(jsonMatch[0]);
-              console.log(`[analyzeAnswer] Generated ${q2Questions.length} Q2 questions`);
-              
-              // Add medium/hard questions to queue2 with metadata
-              for (const q2 of q2Questions) {
-                updatedQueues.queue2.push({
-                  ...q2,
-                  topicId: topicId,
-                  parentQuestionId: currentQuestion.id,
-                  id: generateId(),
-                  queueType: 'Q2'
-                });
-              }
-            }
-          }
-        } catch (e) {
-          console.error('[analyzeAnswer] Error generating Q2 questions:', e);
-        }
-        
-        // Now move FIRST medium question to Queue 1 for immediate asking
-        if (!currentQuestion.difficulty) {
-          // Base question with high score → move MEDIUM to Queue 1
-          const mediumQ = updatedQueues.queue2.find(
-            q => q.topicId === topicId && q.difficulty === 'medium'
-          );
-          if (mediumQ) {
-            console.log(`[analyzeAnswer] Moving medium Q2 to Queue 1: "${mediumQ.question.substring(0, 60)}..."`);
-            updatedQueues.queue2 = updatedQueues.queue2.filter(q => q.id !== mediumQ.id);
-            updatedQueues.queue1.unshift(mediumQ); // Add to front of Queue 1
-          }
-        } else if (currentQuestion.difficulty === 'medium') {
-          // Medium question with high score → move HARD to Queue 1
-          const hardQ = updatedQueues.queue2.find(
-            q => q.topicId === topicId && q.difficulty === 'hard'
-          );
-          if (hardQ) {
-            console.log(`[analyzeAnswer] Moving hard Q2 to Queue 1: "${hardQ.question.substring(0, 60)}..."`);
-            updatedQueues.queue2 = updatedQueues.queue2.filter(q => q.id !== hardQ.id);
-            updatedQueues.queue1.unshift(hardQ); // Add to front of Queue 1
-          }
+        if (!deleteResult.success) {
+          console.error(`[analyzeAnswer] Failed to delete Q2 ${q2Id}:`, deleteResult.error);
+        } else {
+          console.log(`[analyzeAnswer] ✓ Deleted Q2 ${q2Id}`);
         }
       }
     }
-    // route_action === 'normal_flow' or 10-80%: Just proceed to next question (no special action)
 
-    return { updatedQueues, correctness, evaluation };
+    // Add Q3 followup question to database if generated
+    if (analysisResult.shouldGenerateQ3 && analysisResult.q3Question) {
+      console.log(`[analyzeAnswer] Adding Q3 followup question immediately after current question`);
+      
+      // First add the question to database (unpreprocessed)
+      const addResult = await addAskedQuestion(interviewId, {
+        id: analysisResult.q3Question.id,
+        question: analysisResult.q3Question.question,
+        category: 'technical' as const,
+        queueType: 'Q3' as const,
+        parentQuestionId: analysisResult.q3Question.parentQuestionId,
+        askedAt: undefined,
+        preprocessed: false,
+        audioUrl: undefined,
+        userAnswer: undefined,
+        correctness: undefined,
+      }, currentQuestion.id); // Insert AFTER the current question
 
+      if (addResult.success) {
+        console.log(`[analyzeAnswer] ✓ Added Q3 question ${analysisResult.q3Question.id} after question ${currentQuestion.id}`);
+        
+        // Now preprocess the Q3 question (generate ideal answer + TTS audio)
+        console.log(`[analyzeAnswer] Preprocessing Q3 question ${analysisResult.q3Question.id}...`);
+        const { preprocessQuestion } = await import('./question-generation.actions');
+        const { updateAskedQuestion } = await import('./storage.actions');
+        
+        try {
+          // Generate ideal answer for Q3
+          const preprocessResult = await preprocessQuestion(analysisResult.q3Question.question);
+          
+          if (preprocessResult.success && preprocessResult.answer) {
+            console.log(`[analyzeAnswer] ✓ Generated ideal answer for Q3`);
+            
+            // Update question with ideal answer (mark as preprocessed but no TTS yet)
+            await updateAskedQuestion(interviewId, analysisResult.q3Question.id, {
+              answer: preprocessResult.answer,
+              source_urls: preprocessResult.source_urls || [],
+              preprocessed: true,
+            });
+            
+            console.log(`[analyzeAnswer] ✓ Q3 question ${analysisResult.q3Question.id} preprocessed successfully`);
+          } else {
+            console.warn(`[analyzeAnswer] Failed to preprocess Q3: ${preprocessResult.error}`);
+          }
+        } catch (preprocessError) {
+          console.error(`[analyzeAnswer] Error preprocessing Q3:`, preprocessError);
+        }
+      } else {
+        console.error(`[analyzeAnswer] Failed to add Q3 question:`, addResult.error);
+      }
+    }
+
+    return { correctness, evaluation };
   } catch (error) {
-    console.error('Error analyzing answer:', error);
+    console.error('[analyzeAnswer] Error:', error);
     return {};
   }
 }
@@ -145,8 +146,6 @@ export async function analyzeAnswer(
  * Check video processing violations from localStorage/session
  * This should be called from client-side video processing component
  */
-// This function is server-side but needs client data
-// For now it's a placeholder - actual implementation should use a client-side hook
 export async function checkVideoViolations(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _interviewId: string

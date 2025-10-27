@@ -1,6 +1,10 @@
 import type { Queues, Question, EngineStats, EngineAdapter } from "./types";
 
-export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing: boolean = false) {
+export function createInterviewEngine(
+  adapter: EngineAdapter, 
+  useVideoProcessing: boolean = false,
+  hasQueue2: boolean = true // New param: false for HR interviews
+) {
   const state = {
     queues: { 
       queue0: useVideoProcessing ? { 
@@ -10,7 +14,7 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
         logs: [] 
       } : undefined,
       queue1: [], 
-      queue2: [], 
+      queue2: hasQueue2 ? [] : undefined, // Optional Queue2
       queue3: [] 
     } as Queues,
     currentQuestion: null as Question | null,
@@ -18,7 +22,7 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
       questionsAsked: 0, 
       queue0Active: useVideoProcessing,
       queue1Size: 0, 
-      queue2Size: 0, 
+      queue2Size: hasQueue2 ? 0 : undefined, // Optional Queue2 stats
       queue3Size: 0,
       violationCount: 0,
       interviewEnded: false
@@ -29,7 +33,9 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
   const setQueues = (q: Queues) => {
     state.queues = q;
     state.stats.queue1Size = q.queue1.length;
-    state.stats.queue2Size = q.queue2.length;
+    if (q.queue2 !== undefined && state.stats.queue2Size !== undefined) {
+      state.stats.queue2Size = q.queue2.length;
+    }
     state.stats.queue3Size = q.queue3.length;
     if (q.queue0) {
       state.stats.violationCount = q.queue0.violation_count;
@@ -180,7 +186,8 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
     question: string,
     correctAnswer: string,
     userAnswer: string,
-    currentQuestion: Question
+    currentQuestion: Question,
+    interviewId: string
   ): Promise<{ correctness: number; shouldEnd: boolean }> => {
     // Check for early termination request
     if (userAnswer.toLowerCase().includes('end this interview') || 
@@ -203,7 +210,8 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
       correctAnswer,
       userAnswer,
       state.queues,
-      currentQuestion
+      currentQuestion,
+      interviewId 
     );
 
     const correctness = result.correctness || 0;
@@ -225,6 +233,11 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
    * Technical question flow rules
    */
   const applyTechnicalFlowRules = (question: Question, correctness: number) => {
+    // Skip depth progression if Queue2 doesn't exist (HR interviews)
+    if (!state.queues.queue2) {
+      return;
+    }
+
     const topicId = question.topicId || question.question;
 
     if (correctness <= 10) {
@@ -241,7 +254,9 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
           state.queues.queue2 = state.queues.queue2.filter(q => q.id !== mediumQ.id);
           state.queues.queue1.unshift(mediumQ);
           state.stats.queue1Size = state.queues.queue1.length;
-          state.stats.queue2Size = state.queues.queue2.length;
+          if (state.stats.queue2Size !== undefined) {
+            state.stats.queue2Size = state.queues.queue2.length;
+          }
         }
       } else if (question.difficulty === 'medium') {
         // Medium question → move HARD to Queue 1
@@ -252,7 +267,9 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
           state.queues.queue2 = state.queues.queue2.filter(q => q.id !== hardQ.id);
           state.queues.queue1.unshift(hardQ);
           state.stats.queue1Size = state.queues.queue1.length;
-          state.stats.queue2Size = state.queues.queue2.length;
+          if (state.stats.queue2Size !== undefined) {
+            state.stats.queue2Size = state.queues.queue2.length;
+          }
         }
       }
       // If already HARD or >= 80%, just proceed to next question
@@ -275,10 +292,14 @@ export function createInterviewEngine(adapter: EngineAdapter, useVideoProcessing
    * Discard all medium/hard questions for a topic after a follow-up
    */
   const discardDepthQuestions = (topicId: string) => {
+    if (!state.queues.queue2) return; // Skip if no Queue2 (HR interviews)
+    
     state.queues.queue2 = state.queues.queue2.filter(
       q => q.topicId !== topicId
     );
-    state.stats.queue2Size = state.queues.queue2.length;
+    if (state.stats.queue2Size !== undefined) {
+      state.stats.queue2Size = state.queues.queue2.length;
+    }
   };
 
   return {

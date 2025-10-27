@@ -1,5 +1,3 @@
-"use server";
-
 // Config Actions
 export {
   getInterviewConfig
@@ -39,6 +37,7 @@ export {
   addAskedQuestion,
   markQuestionAsked,
   updateAskedQuestionAnswer,
+  updateAskedQuestion,
   removeAskedQuestion,
   getAskedQuestions,
   markChunkPreprocessed,

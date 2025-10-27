@@ -8,6 +8,7 @@ import type { EngineAdapter, Queues, Question } from "./types";
 export interface UseInterviewEngineOptions {
   adapter: EngineAdapter;
   useVideoProcessing?: boolean;
+  hasQueue2?: boolean; // New: false for HR interviews, true for technical
   enableChunking?: boolean; // Enable chunking/batching
   interviewId?: string; // Required if chunking enabled
 }
@@ -19,13 +20,16 @@ export function useInterviewEngine(
   // Handle both old and new API
   const options = typeof adapterOrOptions === 'object' && 'adapter' in adapterOrOptions
     ? adapterOrOptions
-    : { adapter: adapterOrOptions, useVideoProcessing, enableChunking: false };
+    : { adapter: adapterOrOptions, useVideoProcessing, enableChunking: false, hasQueue2: true };
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars, unused-imports/no-unused-vars
-  const { adapter, enableChunking = false, interviewId = '' } = options;
+  const { adapter, enableChunking = false, interviewId = '', hasQueue2 = true } = options;
   const videoProcessing = options.useVideoProcessing ?? useVideoProcessing;
 
-  const engine = useMemo(() => createInterviewEngine(adapter, videoProcessing), [adapter, videoProcessing]);
+  const engine = useMemo(
+    () => createInterviewEngine(adapter, videoProcessing, hasQueue2), 
+    [adapter, videoProcessing, hasQueue2]
+  );
   const [queues, setQueuesState] = useState<Queues>(engine.state.queues);
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(engine.state.currentQuestion);
   const [stats, setStats] = useState(engine.state.stats);
@@ -47,9 +51,10 @@ export function useInterviewEngine(
     question: string,
     correctAnswer: string,
     userAnswer: string,
-    currentQuestion: Question
+    currentQuestion: Question,
+    interviewId: string
   ) => {
-    const result = await engine.handleAnswer(question, correctAnswer, userAnswer, currentQuestion);
+    const result = await engine.handleAnswer(question, correctAnswer, userAnswer, currentQuestion, interviewId);
     sync();
     return result;
   };
