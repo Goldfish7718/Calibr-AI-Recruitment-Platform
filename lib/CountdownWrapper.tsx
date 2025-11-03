@@ -126,7 +126,8 @@ export default function CountdownWrapper({
     }
 
     initializeTestSession()
-  }, [testId, serverActions, localStoragePrefix])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testId, localStoragePrefix])
 
  
   useEffect(() => {

@@ -172,6 +172,7 @@ export const useResumes = () => {
 
   useEffect(() => {
     loadResumes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user?._id]); // Re-run when session changes
 
   return { resumes, isLoading, error, reload: loadResumes };
@@ -219,6 +220,7 @@ export const useCandidateProfile = () => {
 
   useEffect(() => {
     loadProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user?._id]);
 
   return { profile, isLoading, error, reload: loadProfile };

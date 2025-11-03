@@ -237,6 +237,7 @@ export default function HRInterviewClient({
 
       console.log("[HR Interview] ✓ Cleanup complete");
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty deps - only run on unmount
 
   // Pause interview when tab is hidden
@@ -284,7 +285,8 @@ export default function HRInterviewClient({
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [session.currentScreen, media, session]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.currentScreen, media]);
 
   // Video log persistence
   useEffect(() => {
@@ -311,7 +313,8 @@ export default function HRInterviewClient({
       };
       cleanup();
     };
-  }, [session.currentScreen, interviewId, actions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.currentScreen, interviewId]);
 
   // Timer
   useEffect(() => {

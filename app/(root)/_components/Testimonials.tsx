@@ -1,5 +1,6 @@
 import React from 'react';
 import { Star, Quote } from 'lucide-react';
+import Image from 'next/image';
 
 const Testimonials: React.FC = () => {
   const testimonials = [
@@ -63,9 +64,11 @@ const Testimonials: React.FC = () => {
               </div>
               
               <div className="flex items-center">
-                <img
+                <Image
                   src={testimonial.image}
                   alt={testimonial.name}
+                  width={48}
+                  height={48}
                   className="w-12 h-12 rounded-full object-cover mr-4 border-2 border-white/20"
                 />
                 <div>

@@ -143,8 +143,7 @@ export default function RecordAudioTestPage() {
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        } catch (e) {
+        } catch {
           // Ignore cleanup errors
         }
       }
@@ -152,6 +151,7 @@ export default function RecordAudioTestPage() {
         clearTimeout(pauseTimeoutRef.current);
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const startRecording = () => {

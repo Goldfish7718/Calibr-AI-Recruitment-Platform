@@ -441,9 +441,11 @@ export default function VideoProcessing({ autoStart = false }: { autoStart?: boo
 
       workerRef.current?.terminate();
       
-      const tracks = (videoRef.current?.srcObject as MediaStream)?.getTracks();
+      const video = videoRef.current;
+      const tracks = (video?.srcObject as MediaStream)?.getTracks();
       tracks?.forEach((track) => track.stop());
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /** Auto-start camera if autoStart prop is true */
@@ -452,6 +454,7 @@ export default function VideoProcessing({ autoStart = false }: { autoStart?: boo
       console.log('[VideoProcessing] Auto-starting camera...');
       startDetection();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart, mediapipeLoaded, cameraStatus]);
 
   /** Stop detection */

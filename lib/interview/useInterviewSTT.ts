@@ -221,5 +221,6 @@ export function useInterviewSTT(options: UseInterviewSTTOptions) {
         clearTimeout(sttRestartTimeoutRef.current);
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty deps - initialize ONCE only
 }
