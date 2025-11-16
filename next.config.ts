@@ -7,6 +7,11 @@ const nextConfig = {
         hostname: 'calibr.s3.us-east-1.amazonaws.com',
         pathname: '/**',
       },
+      {
+        protocol: 'https',
+        hostname: 'images.pexels.com',
+        pathname: '/**',
+      }
     ],
   },
   headers: async () => ([
@@ -21,7 +26,7 @@ const nextConfig = {
     }
   ]),
   reactStrictMode: true,
-  webpack: (config: any, { isServer }: { isServer: boolean }) => {
+  webpack: (config : any, { isServer } : any) => {
     // Fix for face-api.js in browser (ignore Node.js modules)
     if (!isServer) {
       config.resolve.fallback = {

@@ -408,9 +408,9 @@ export async function fetchAssessmentsForJob(jobId: string): Promise<ActionRespo
       const formattedAssessments = assessments.map(assessment => ({
         ...assessment,
         _id: assessment._id.toString()
-      })) as Assessment[];
+      }));
 
-      return createSuccessResponse("Assessments fetched", formattedAssessments);
+      return createSuccessResponse("Assessments fetched", formattedAssessments as unknown as Assessment[]);
     }, "Failed to connect to database");
   }, "Failed to fetch assessments for job");
 }
@@ -438,9 +438,9 @@ export async function fetchAssessmentById(assessmentId: string): Promise<ActionR
       const formattedAssessment = {
         ...assessment,
         _id: assessment._id.toString()
-      } as Assessment;
+      };
 
-      return createSuccessResponse("Assessment fetched", formattedAssessment);
+      return createSuccessResponse("Assessment fetched", formattedAssessment as unknown as Assessment);
     }, "Failed to connect to database");
   }, "Failed to fetch assessment");
 }

@@ -132,6 +132,7 @@ export default function AptitudeExamClient({ aptitudeId }: AptitudeExamClientPro
     if (timeLeft === 0 && !ended && !submitting) {
       handleSubmitTest();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeLeft, ended, submitting]);
 
   // Handle server-side time expiration
@@ -148,6 +149,7 @@ export default function AptitudeExamClient({ aptitudeId }: AptitudeExamClientPro
     return () => {
       window.removeEventListener('testTimeExpired', handleServerTimeExpired);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ended, submitting]);
 
   // Auto-submit when warning limits are exceeded

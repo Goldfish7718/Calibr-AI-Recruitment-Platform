@@ -308,6 +308,7 @@ export default function SystemCheckPage() {
     // Listen for fullscreen changes
     document.addEventListener('fullscreenchange', checkFullscreen);
     return () => document.removeEventListener('fullscreenchange', checkFullscreen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const getStatusIcon = (status: CheckStatus) => {

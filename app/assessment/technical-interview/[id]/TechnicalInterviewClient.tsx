@@ -305,7 +305,8 @@ export default function TechnicalInterviewClient({
     return () => {
       if (session.timerRef.current) clearInterval(session.timerRef.current);
     };
-  }, [session.currentScreen, session.TESTING_MODE, flow]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.currentScreen, session.TESTING_MODE]);
 
   // Models loading
   useEffect(() => {
@@ -330,7 +331,8 @@ export default function TechnicalInterviewClient({
       window.removeEventListener("mediapipe-loaded", checkModelsLoaded);
       window.removeEventListener("yolo-loaded", checkModelsLoaded);
     };
-  }, [session.modelsLoaded, session.setModelsLoaded]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.modelsLoaded]);
 
   // Load browser TTS voices
   useEffect(() => {

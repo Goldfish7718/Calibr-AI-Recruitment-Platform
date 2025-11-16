@@ -86,7 +86,7 @@ export function CandidatesTable({ job, onBack }: CandidatesTableProps) {
     } else {
       setSelectAll(false);
     }
-  }, [selectedCandidates, candidates]);
+  }, [selectedCandidates.size, candidates.length]);
 
   const handleToggleCandidate = (candidateId: string) => {
     const newSelected = new Set(selectedCandidates);

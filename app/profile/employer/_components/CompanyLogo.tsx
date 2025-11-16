@@ -3,6 +3,7 @@
 import React, { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import Image from "next/image";
 import {
   Dialog,
   DialogContent,
@@ -177,9 +178,11 @@ export default function CompanyLogo({ profileData, setProfileData }: CompanyLogo
               
               {logoPreview ? (
                 <div className="space-y-3">
-                  <img
+                  <Image
                     src={logoPreview}
                     alt="Preview"
+                    width={128}
+                    height={128}
                     className="mx-auto h-32 w-32 object-contain rounded-lg bg-white p-2"
                   />
                   <p className="text-sm text-gray-300">Click to change logo</p>

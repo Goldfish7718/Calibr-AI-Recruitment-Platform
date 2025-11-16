@@ -150,6 +150,7 @@ const InterviewProgress = () => {
     
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Generate rounds based on assessment data

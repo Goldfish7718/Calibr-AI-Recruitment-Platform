@@ -3,6 +3,7 @@
 import React, { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import Image from "next/image";
 import {
   Dialog,
   DialogContent,
@@ -181,9 +182,11 @@ export default function ProfileAvatar({ profileData, setProfileData }: ProfileAv
               
               {imagePreview ? (
                 <div className="space-y-3">
-                  <img
+                  <Image
                     src={imagePreview}
                     alt="Preview"
+                    width={128}
+                    height={128}
                     className="mx-auto h-32 w-32 object-cover rounded-lg"
                   />
                   <p className="text-sm text-gray-300">Click to change image</p>

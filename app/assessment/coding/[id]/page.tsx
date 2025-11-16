@@ -194,6 +194,7 @@ const Coding = () => {
     } else if (currentQuestion && currentQuestion.starterCode[selectedLanguage]) {
       setCode(currentQuestion.starterCode[selectedLanguage]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questionId, selectedLanguage, currentQuestion]);
 
   // Timer effect
@@ -230,6 +231,7 @@ const Coding = () => {
     return () => {
       if (interval) clearInterval(interval);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTimerActive, timeRemaining, params.id]);
 
   // Timer persistence effect - update every 10 seconds
@@ -408,7 +410,7 @@ const Coding = () => {
     e.preventDefault();
   };
 
-  const handleMouseMove = (e: MouseEvent) => {
+  const handleMouseMove = React.useCallback((e: MouseEvent) => {
     if (!isResizing) return;
     
     const containerWidth = window.innerWidth;
@@ -422,7 +424,7 @@ const Coding = () => {
         console.warn('Failed to save panel width preference:', error);
       }
     }
-  };
+  }, [isResizing]);
 
   const handleMouseUp = () => {
     setIsResizing(false);
@@ -433,7 +435,7 @@ const Coding = () => {
     e.preventDefault();
   };
 
-  const handleVerticalMouseMove = (e: MouseEvent) => {
+  const handleVerticalMouseMove = React.useCallback((e: MouseEvent) => {
     if (!isVerticalResizing) return;
     
     const editorPanel = (e.target as Element).closest('.editor-panel');
@@ -453,7 +455,7 @@ const Coding = () => {
         console.warn('Failed to save output panel height preference:', error);
       }
     }
-  };
+  }, [isVerticalResizing]);
 
   const handleVerticalMouseUp = () => {
     setIsVerticalResizing(false);
